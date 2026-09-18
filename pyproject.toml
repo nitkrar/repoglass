@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "repoglass"
+version = "0.1.0"
+description = "Local code and prose index: symbol navigation, lexical and semantic retrieval"
+requires-python = ">=3.11"          # tomllib
+license = { text = "MIT" }
+
+dependencies = [
+    "tree-sitter>=0.25",            # Query/QueryCursor; Language.query removed in the same release
+    "tree-sitter-language-pack>=1.19",
+    "grep-ast>=0.9",
+    "model2vec>=0.9",               # brings numpy and tokenizers
+    "numpy>=1.26",                  # direct: search/vector.py uses it unconditionally
+    "pathspec>=0.12",
+    # Direct: embeddings.resolve_model_source calls snapshot_download.
+    "huggingface-hub>=0.23",
+]
+
+[project.scripts]
+repoglass = "repoglass.cli:main"
+rpg = "repoglass.cli:main"
+
+[project.optional-dependencies]
+config = ["tomlkit>=0.13"]
+# embed_backend="onnx". A real transformer without pulling in torch:
+# onnxruntime is inference-only and has no dependency tree. tokenizers
+# and numpy already arrive with model2vec.
+onnx = ["onnxruntime>=1.17"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+repoglass = ["corpus/queries/*.scm", "corpus/queries/NOTICE.md",
+             "corpus/queries/manifest.json", "sql/*.sql"]

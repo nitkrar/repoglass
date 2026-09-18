@@ -1,0 +1,71 @@
+{
+  "bash": {
+    "upstream_set": "tree-sitter-language-pack"
+  },
+  "c": {
+    "supplemental_refs": "c-refs.scm",
+    "upstream_set": "tree-sitter-language-pack"
+  },
+  "cpp": {
+    "supplemental_refs": "cpp-refs.scm",
+    "upstream_set": "tree-sitter-language-pack"
+  },
+  "csharp": {
+    "upstream_set": "tree-sitter-language-pack"
+  },
+  "elixir": {
+    "upstream_set": "tree-sitter-language-pack"
+  },
+  "go": {
+    "upstream_set": "tree-sitter-language-pack"
+  },
+  "haskell": {
+    "supplemental_refs": "haskell-refs.scm",
+    "upstream_set": null
+  },
+  "java": {
+    "upstream_set": "tree-sitter-language-pack"
+  },
+  "javascript": {
+    "upstream_set": "tree-sitter-language-pack"
+  },
+  "kotlin": {
+    "upstream_set": "tree-sitter-languages"
+  },
+  "lua": {
+    "upstream_set": "tree-sitter-language-pack"
+  },
+  "markdown": {
+    "upstream_set": null
+  },
+  "php": {
+    "supplemental_refs": "php-refs.scm",
+    "upstream_set": "tree-sitter-languages"
+  },
+  "python": {
+    "upstream_set": "tree-sitter-language-pack"
+  },
+  "ruby": {
+    "upstream_set": "tree-sitter-language-pack"
+  },
+  "rust": {
+    "supplemental_refs": "rust-refs.scm",
+    "upstream_set": "tree-sitter-language-pack"
+  },
+  "scala": {
+    "supplemental_refs": "scala-refs.scm",
+    "upstream_set": null
+  },
+  "swift": {
+    "supplemental_refs": "swift-refs.scm",
+    "upstream_set": "tree-sitter-language-pack"
+  },
+  "typescript": {
+    "supplemental_refs": "typescript-refs.scm",
+    "upstream_set": "tree-sitter-languages"
+  },
+  "zig": {
+    "supplemental_refs": "zig-refs.scm",
+    "upstream_set": null
+  }
+}
