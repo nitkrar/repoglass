@@ -16,3 +16,6 @@ dist/
 # needs nothing from here.
 /benchmarks/queries/
 /benchmarks/.bench/
+
+# Local agent session state.
+.claude/

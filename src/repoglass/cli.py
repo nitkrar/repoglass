@@ -32,12 +32,9 @@ from .models import Hit
 
 
 def _version() -> str:
-    from importlib.metadata import PackageNotFoundError, version
+    from . import __version__
 
-    try:
-        return version("repoglass")
-    except PackageNotFoundError:
-        return "0.0.0+unknown"
+    return __version__
 
 
 def _open(args) -> Index:

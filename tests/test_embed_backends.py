@@ -8,8 +8,10 @@ must be pinned.
 from __future__ import annotations
 
 import unittest
+import unittest.mock
 
 from repoglass import embeddings
+from repoglass.embeddings import backends
 from repoglass.config import Paths, Settings
 
 
@@ -149,6 +151,69 @@ class OnnxEmbedderTests(unittest.TestCase):
     def test_the_default_prefix_is_applied(self) -> None:
         self.assertTrue(self.emb.query_prefix)
         self.assertNotEqual(self.emb.encode(["x"]), self.emb.encode_query(["x"]))
+
+
+class _FakeSession:
+    def __init__(self, path, arg=None, providers=None):
+        self.path, self.arg, self.providers = path, arg, providers
+
+
+class _FakeOptions:
+    def __init__(self) -> None:
+        self.devices = None
+
+    def add_provider_for_devices(self, devices, options) -> None:
+        self.devices = devices
+
+
+class _FakeDevice:
+    def __init__(self, ep_name: str) -> None:
+        self.ep_name = ep_name
+
+
+class _FakeOrt:
+    """Enough onnxruntime to see which attachment path was taken."""
+
+    InferenceSession = _FakeSession
+    SessionOptions = _FakeOptions
+
+    def __init__(self, devices=()) -> None:
+        self._devices = devices
+
+    def get_available_providers(self):
+        return ["CPUExecutionProvider"]
+
+    def get_ep_devices(self):
+        return list(self._devices)
+
+
+class ProviderAttachmentTests(unittest.TestCase):
+    """A plugin provider named in `providers=` is dropped rather than
+    refused: the session builds, reports success, and runs on CPU. So
+    the two attachment paths are pinned by which one each choice takes,
+    not by the session merely constructing."""
+
+    def test_a_named_provider_goes_through_the_providers_argument(self) -> None:
+        sess = backends._session(_FakeOrt(), "m.onnx", "cpu")
+        self.assertEqual(["CPUExecutionProvider"], sess.providers)
+        self.assertIsNone(sess.arg)
+
+    def test_webgpu_attaches_by_device_and_never_by_name(self) -> None:
+        name = "WebGpuExecutionProvider"
+        ort = _FakeOrt(devices=[_FakeDevice("CPUExecutionProvider"),
+                                _FakeDevice(name)])
+        with unittest.mock.patch.object(backends, "_webgpu",
+                                        return_value=name):
+            sess = backends._session(ort, "m.onnx", "webgpu")
+        # `providers=` unused: a plugin name there would silently run on CPU.
+        self.assertIsNone(sess.providers)
+        self.assertEqual([name], [d.ep_name for d in sess.arg.devices])
+
+    def test_webgpu_without_a_device_fails_rather_than_falling_back(self) -> None:
+        with unittest.mock.patch.object(backends, "_webgpu",
+                                        return_value="WebGpuExecutionProvider"):
+            with self.assertRaises(ValueError):
+                backends._session(_FakeOrt(), "m.onnx", "webgpu")
 
 
 if __name__ == "__main__":

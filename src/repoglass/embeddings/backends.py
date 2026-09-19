@@ -166,12 +166,17 @@ class FakeEmbedder(_PrefixMixin):
         return out
 
 
+#: Sequences per inference call. Narrow rather than wide: peak memory
+#: scales with the batch, while throughput does not once the batch is
+#: grouped by length.
+_BATCH = 16
+
+
 class OnnxEmbedder(_PrefixMixin):
     """A sentence transformer through onnxruntime. No torch, no server.
 
-    Opt-in rather than the default: it buys better retrieval on prose
-    queries at the cost of an optional dependency and a far slower index
-    build.
+    Opt-in rather than the default: it costs an optional dependency and
+    a far slower index build.
 
     `dims` is learned by encoding once at construction rather than read
     from config.json, because the pooling choice -- not the hidden size
@@ -180,7 +185,7 @@ class OnnxEmbedder(_PrefixMixin):
 
     def __init__(self, repo_id: str, *, local_only: bool = False,
                  pooling: str | None = None, filename: str = "onnx/model.onnx",
-                 providers: str = "auto") -> None:
+                 providers: str = "webgpu") -> None:
         try:
             import onnxruntime as ort
         except ImportError as exc:      # pragma: no cover - environment
@@ -210,7 +215,7 @@ class OnnxEmbedder(_PrefixMixin):
                 get(filename + "_data")
             except Exception:       # most models have no sidecar
                 pass
-        self._sess = ort.InferenceSession(path, providers=_providers(ort, providers))
+        self._sess = _session(ort, path, providers)
         self.providers = self._sess.get_providers()
         self._inputs = {i.name for i in self._sess.get_inputs()}
         # Decoder-style exports (Qwen3-Embedding and friends) declare
@@ -245,10 +250,15 @@ class OnnxEmbedder(_PrefixMixin):
     def _encode(self, texts: Sequence[str]) -> list[Sequence[float]]:
         import numpy as np
 
-        out: list[Sequence[float]] = []
-        batch = 64
-        for i in range(0, len(texts), batch):
-            enc = self._tok.encode_batch(list(texts[i : i + batch]))
+        # A batch is padded to its longest member, so encoding in corpus
+        # order pads every short chunk up to whatever long one happens to
+        # share its batch. Grouping by length first and restoring the
+        # caller's order afterwards leaves the vectors unchanged.
+        order = sorted(range(len(texts)), key=lambda i: len(texts[i]))
+        out: list[Sequence[float]] = [()] * len(texts)
+        for i in range(0, len(order), _BATCH):
+            window = order[i : i + _BATCH]
+            enc = self._tok.encode_batch([texts[j] for j in window])
             feed = {
                 "input_ids": np.array([e.ids for e in enc], dtype=np.int64),
                 "attention_mask": np.array(
@@ -267,7 +277,8 @@ class OnnxEmbedder(_PrefixMixin):
             vec = (raw if raw.ndim == 2
                    else _pool(raw, feed["attention_mask"], self.pooling))
             vec = vec / (np.linalg.norm(vec, axis=1, keepdims=True) + 1e-9)
-            out.extend(v.tolist() for v in vec)
+            for j, v in zip(window, vec):
+                out[j] = v.tolist()
         return out
 
 
@@ -289,6 +300,52 @@ def _pool(hidden, mask, how: str):
         return (hidden * m[:, :, None]).sum(1) / np.maximum(m.sum(1, keepdims=True), 1e-9)
     idx = np.maximum(m.sum(1).astype("int64") - 1, 0)
     return hidden[np.arange(hidden.shape[0]), idx]
+
+
+#: Set once `register_execution_provider_library` has run for webgpu.
+#: Registration is process-wide and a second call raises.
+_WEBGPU_NAME: str | None = None
+
+
+def _webgpu(ort) -> str:
+    """Register the webgpu plugin library and return its provider name."""
+    global _WEBGPU_NAME
+
+    if _WEBGPU_NAME is None:
+        try:
+            import onnxruntime_ep_webgpu as plugin
+        except ImportError as exc:
+            raise ValueError(
+                "embed_providers='webgpu' requires the plugin: "
+                "pip install 'repoglass[webgpu]', or set "
+                "embed_providers='cpu'"
+            ) from exc
+        name = plugin.get_ep_name()
+        ort.register_execution_provider_library(name, plugin.get_library_path())
+        _WEBGPU_NAME = name
+    return _WEBGPU_NAME
+
+
+def _session(ort, path: str, choice: str):
+    """An inference session bound to the chosen execution provider.
+
+    webgpu ships as a plugin provider, which `providers=` cannot reach:
+    a name onnxruntime does not recognise there is dropped and the
+    session runs on CPU reporting success. Plugins attach by device
+    instead, so they take a separate path rather than a longer list.
+    """
+    if choice != "webgpu":
+        return ort.InferenceSession(path, providers=_providers(ort, choice))
+    name = _webgpu(ort)
+    devices = [d for d in ort.get_ep_devices() if d.ep_name == name]
+    if not devices:
+        raise ValueError(
+            f"{name} registered but exposes no device; "
+            "set embed_providers='cpu'"
+        )
+    opts = ort.SessionOptions()
+    opts.add_provider_for_devices(devices, {})
+    return ort.InferenceSession(path, opts)
 
 
 def _providers(ort, choice: str) -> list[str]:

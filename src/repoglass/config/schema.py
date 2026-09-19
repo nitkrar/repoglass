@@ -60,8 +60,8 @@ class Settings:
     #: can return. Raising it only helps with `rerank` on.
     candidate_depth: int = 30
     #: Distil prose chunks instead of embedding them verbatim. Code is
-    #: always embedded raw. Off by default: it makes docs retrieval
-    #: worse, and suppressing a category is the content filter's job.
+    #: always embedded raw. Off by default: suppressing a category is
+    #: the content filter's job.
     distill_docs: bool = False
     #: What a caller asked for, when the caller is a config file rather
     #: than an argument. Empty means "use the default", which is every
@@ -103,10 +103,9 @@ class Settings:
     test_markers: tuple[str, ...] = ("test", "spec")
 
     #: 'static'  model2vec, no extra dependency, effectively instant.
-    #: 'onnx'    a real transformer via onnxruntime. Better on semantic
-    #:           queries, much slower to index, and costs an 80 MB
-    #:           optional dependency. Pair with embed_model
-    #:           'BAAI/bge-small-en-v1.5'.
+    #: 'onnx'    a real transformer via onnxruntime. Much slower to
+    #:           index, and costs an optional dependency. Pair with
+    #:           embed_model 'BAAI/bge-small-en-v1.5'.
     #: 'http'    an OpenAI-compatible /v1/embeddings server.
     #: 'none'    no vector tier; exact and lexical only.
     embed_backend: Literal["static", "onnx", "http", "none"] = "static"
@@ -126,9 +125,17 @@ class Settings:
     #: Document-side marker. e5 and nomic want one; most models do not.
     #: None = whatever the model family expects, '' = deliberately none.
     embed_doc_prefix: str | None = None
-    #: onnxruntime execution providers. 'auto' prefers CoreML on Apple
-    #: silicon and always falls back to CPU.
-    embed_providers: str = "auto"
+    #: onnxruntime execution provider.
+    #:
+    #:   webgpu  the plugin provider, via `repoglass[webgpu]`. Takes the
+    #:           whole graph on Metal, Vulkan or D3D12.
+    #:   cpu     always present, and the fallback when the plugin is not
+    #:           installed.
+    #:   auto    CoreML or CUDA where the build offers them, then CPU.
+    #:           Avoid on Apple silicon: CoreML claims only part of the
+    #:           graph and splits the rest across dozens of partitions,
+    #:           which is slower than cpu and costs far more memory.
+    embed_providers: str = "webgpu"
     #: Path of the graph inside the HF repo. Layout is not standardised:
     #: bge and nomic use onnx/model.onnx, e5-small-v2 puts model.onnx at
     #: the root, and quantised variants sit beside them.
@@ -157,9 +164,8 @@ class Settings:
     #: "handler" can match `HandlerStack` -- FTS5's unicode61 tokenizer
     #: does not split camelCase while `tokenize_query` does.
     #:
-    #: Off by default: common fragments (get, set, name, item) land in
-    #: nearly every chunk and cost BM25 its discrimination, to close a
-    #: gap the exact-symbol tier already covers.
+    #: Off by default: the gap it closes is one the exact-symbol tier
+    #: already covers.
     split_identifiers: Literal["off", "inline", "append"] = "off"
     max_chunk_lines: int = 200
 

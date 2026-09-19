@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "repoglass"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Local code and prose index: symbol navigation, lexical and semantic retrieval"
 requires-python = ">=3.11"          # tomllib
 license = { text = "MIT" }
@@ -30,6 +30,13 @@ config = ["tomlkit>=0.13"]
 # onnxruntime is inference-only and has no dependency tree. tokenizers
 # and numpy already arrive with model2vec.
 onnx = ["onnxruntime>=1.17"]
+# embed_providers="webgpu". A plugin provider registered at runtime, so
+# it installs beside onnxruntime rather than replacing it. The device
+# API it needs landed in 1.24.4.
+webgpu = ["onnxruntime>=1.24.4", "onnxruntime-ep-webgpu"]
+
+[tool.setuptools.dynamic]
+version = { attr = "repoglass.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
