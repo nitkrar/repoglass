@@ -65,6 +65,17 @@ jobs:
       - name: install
         run: python -m pip install --quiet '.[onnx]'
 
+      # The tests construct the embedder with local_only, so they never
+      # fetch anything themselves. Warming the cache through the same
+      # constructor keeps the set of files it needs in one place.
+      - name: fetch the model
+        run: |
+          python -c "
+          from repoglass.embeddings.backends import OnnxEmbedder
+          from tests.test_embed_backends import OnnxEmbedderTests as t
+          OnnxEmbedder(t.MODEL)
+          "
+
       - name: tests
         run: |
           python -m unittest -v tests.test_embed_backends.OnnxEmbedderTests \
