@@ -31,6 +31,16 @@ class Index:
         self._embedder = None
         self._embedder_built = False
 
+    def close(self) -> None:
+        """Release the database connection. Safe to call more than once."""
+        self._store.close()
+
+    def __enter__(self) -> "Index":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
     @classmethod
     def open(
         cls,

@@ -41,3 +41,37 @@ jobs:
         run: |
           rpg --version
           repoglass --help
+
+  # OnnxEmbedder asserts that two unrelated texts separate under a query,
+  # which needs a real transformer and so cannot run in the offline matrix
+  # above. Without this job those four tests skip everywhere and the
+  # backend ships untested.
+  onnx:
+    name: onnx backend
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-bge-small-en-v1.5
+
+      - name: install
+        run: python -m pip install --quiet '.[onnx]'
+
+      - name: tests
+        run: |
+          python -m unittest -v tests.test_embed_backends.OnnxEmbedderTests \
+            2>&1 | tee out.txt
+          # unittest exits 0 on a skip, so the one failure this job is meant
+          # to catch is the tests not running at all.
+          if grep -q skipped out.txt; then
+            echo "::error::onnx tests skipped; this job exists to run them"
+            exit 1
+          fi

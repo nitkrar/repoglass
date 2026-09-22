@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 
 from repoglass import Index
@@ -59,11 +60,11 @@ class DerivedByDefaultTests(LexicalStorageTestCase):
 
     def test_a_plain_connection_can_read_the_index(self) -> None:
         """No registered function, no import of this package."""
-        self.idx._store.conn.close()
-        conn = sqlite3.connect(self.db)
-        rows = conn.execute(
-            "SELECT count(*) FROM chunk_fts WHERE chunk_fts MATCH 'refund'"
-        ).fetchone()[0]
+        self.idx.close()
+        with closing(sqlite3.connect(self.db)) as conn:
+            rows = conn.execute(
+                "SELECT count(*) FROM chunk_fts WHERE chunk_fts MATCH 'refund'"
+            ).fetchone()[0]
         self.assertGreater(rows, 0)
 
     def test_the_index_agrees_with_its_content_source(self) -> None:
@@ -106,9 +107,10 @@ class NonDerivableRenderingTests(LexicalStorageTestCase):
     def test_it_still_reads_without_a_registered_function(self) -> None:
         idx = self.open(Settings(embed_backend="none", lexical_enrich=True))
         db = idx._paths.db
-        idx._store.conn.close()
-        sqlite3.connect(db).execute(
-            "SELECT count(*) FROM chunk_fts WHERE chunk_fts MATCH 'refund'")
+        idx.close()
+        with closing(sqlite3.connect(db)) as conn:
+            conn.execute(
+                "SELECT count(*) FROM chunk_fts WHERE chunk_fts MATCH 'refund'")
 
 
 if __name__ == "__main__":

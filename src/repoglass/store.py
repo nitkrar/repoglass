@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import sqlite3
 import time
+import weakref
 from contextlib import contextmanager
 from dataclasses import dataclass, fields
 from pathlib import Path
@@ -111,6 +112,12 @@ class Store:
         #: Depth of nested `transaction()` blocks. Writers commit on
         #: their own at zero and defer above it.
         self._depth = 0
+        # The connection is this object's to release, so its lifetime is
+        # tied to this object's rather than left to each caller. Bound to
+        # `conn` and not to `self`, which would keep the store alive and
+        # so never run. Calling it directly is what `close` does, and it
+        # runs at most once either way.
+        self._finalize = weakref.finalize(self, conn.close)
 
     @contextmanager
     def transaction(self):
@@ -141,6 +148,17 @@ class Store:
         """Commit, unless a `transaction()` block owns the decision."""
         if self._depth == 0:
             self.conn.commit()
+
+    def close(self) -> None:
+        """Release the connection. Safe to call more than once."""
+        self._finalize()
+        self._vector_cache.clear()
+
+    def __enter__(self) -> "Store":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
 
     @classmethod
     def open(cls, db_path: Path, settings: Settings, *, extractor_rev: str = "") -> "Store":
