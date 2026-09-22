@@ -9,14 +9,15 @@ navigation.
 ## Quickstart
 
 ```bash
-uv tool install repoglass        # or: pipx install repoglass
+brew install nitkrar/tap/repoglass   # or: uv tool install repoglass
 cd ~/your/repo
 rpg search "how are retries handled"
 ```
 
-Either installer puts `rpg` and `repoglass` on PATH and keeps them there
-across upgrades. To work on repoglass itself, `pip install -e .` inside a
-virtualenv leaves both commands in that virtualenv's `bin/`.
+`pipx install repoglass` works too. Each of these puts `rpg` and `repoglass`
+on PATH and keeps them there across upgrades. To work on repoglass itself,
+`pip install -e .` inside a virtualenv leaves both commands in that
+virtualenv's `bin/`.
 
 The first command that needs an index builds it. If the default model or grammar
 bundle is not cached yet, that first run may download them; later runs are
