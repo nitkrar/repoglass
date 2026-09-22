@@ -1,13 +1,15 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]        # PEP 639 license-files
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "repoglass"
 dynamic = ["version"]
 description = "Local code and prose index: symbol navigation, lexical and semantic retrieval"
+readme = "README.md"
 requires-python = ">=3.11"          # tomllib
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE", "src/repoglass/corpus/queries/NOTICE.md"]
 
 dependencies = [
     "tree-sitter>=0.25",            # Query/QueryCursor; Language.query removed in the same release
@@ -19,6 +21,10 @@ dependencies = [
     # Direct: embeddings.resolve_model_source calls snapshot_download.
     "huggingface-hub>=0.23",
 ]
+
+[project.urls]
+Homepage = "https://github.com/nitkrar/repoglass"
+Source = "https://github.com/nitkrar/repoglass"
 
 [project.scripts]
 repoglass = "repoglass.cli:main"

@@ -37,3 +37,10 @@ repoglass search --help
   and absences.
 - [docs/worklist.md](docs/worklist.md) lists current user-visible defects.
 - `./.venv/bin/python benchmarks/run_corpus.py` prints current corpus scores.
+- `python -m unittest discover -s tests` runs the test suite. It is stdlib
+  `unittest`; there is no test dependency to install.
+
+## Licence
+
+MIT, see [LICENSE](LICENSE). Third-party material is attributed in
+[src/repoglass/corpus/queries/NOTICE.md](src/repoglass/corpus/queries/NOTICE.md).
