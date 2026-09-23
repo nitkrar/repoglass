@@ -3,10 +3,19 @@ name: release
 on:
   push:
     tags: ["v*"]
+  # Points the formula at a tag already released, so the tap side can be
+  # exercised without spending a PyPI version on finding out.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: an existing tag, e.g. v0.1.0
+        required: true
 
 jobs:
   pypi:
     name: publish repoglass to PyPI
+    # A hand-run must never publish: the tag it names is already out.
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       # Trusted publishing: PyPI verifies this workflow's OIDC identity, so no
@@ -55,6 +64,10 @@ jobs:
   brew:
     name: point the tap at the new release
     needs: pypi
+    # `needs` alone would skip this when pypi is skipped, which is every
+    # hand-run.
+    if: always() && (needs.pypi.result == 'success'
+        || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
 
     steps:
@@ -67,7 +80,7 @@ jobs:
 
       - name: point the formula at this tag
         env:
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           version="${TAG#v}"
           url="https://github.com/nitkrar/repoglass/archive/refs/tags/${TAG}.tar.gz"
@@ -105,7 +118,7 @@ jobs:
 
       - name: commit, once the diff is only the release
         env:
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           if git diff --quiet; then
             echo "formula already at ${TAG}, nothing to push"
