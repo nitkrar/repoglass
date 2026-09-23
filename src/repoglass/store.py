@@ -113,10 +113,9 @@ class Store:
         #: their own at zero and defer above it.
         self._depth = 0
         # The connection is this object's to release, so its lifetime is
-        # tied to this object's rather than left to each caller. Bound to
-        # `conn` and not to `self`, which would keep the store alive and
-        # so never run. Calling it directly is what `close` does, and it
-        # runs at most once either way.
+        # tied to this object's rather than to every caller remembering.
+        # Bound to `conn` and not to `self`, which would keep the store
+        # reachable and so never run.
         self._finalize = weakref.finalize(self, conn.close)
 
     @contextmanager

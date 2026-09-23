@@ -1,10 +1,7 @@
 """References a reader could navigate to, and nothing else.
 
-A reference that names a language keyword or a parameter goes nowhere:
-`rpg refs` on it returns the sites that spell the word, not the sites
-that use a thing. Both queries already say so -- elixir through
-`@ignore`, ruby through `(#is-not? local)` -- and neither mechanism was
-implemented here, so both said it to nobody.
+`rpg refs` on a keyword or a parameter returns the sites that spell the
+word, not the sites that use a thing.
 
 Sets are exact. A subset assertion passes just as well when a query
 upgrade stops capturing real references.

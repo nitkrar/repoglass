@@ -150,10 +150,9 @@ def extract(file: SourceFile, source: str, settings: Settings) -> Extraction:
     #: every `type_identifier`, including the one naming the type --
     #: and a definition is not a use of itself.
     named_here: set[tuple[int, int]] = set()
-    #: Nodes a query marked `@ignore`. One pattern cannot cancel the
-    #: match another pattern makes on the same node, so a query saying
-    #: "this identifier spells a keyword, not a use" has to say it in a
-    #: pattern of its own and have it honoured here.
+    #: Nodes a query marked `@ignore`. A pattern cannot cancel the match
+    #: another pattern makes on the same node, so a query ruling an
+    #: identifier out has to do it from a pattern of its own.
     ignored: set[tuple[int, int]] = {
         (n.start_byte, n.end_byte) for n in captures.get("ignore", ())
     }

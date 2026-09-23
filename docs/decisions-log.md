@@ -24,13 +24,11 @@ the configured lexical rendering differs from the default path-plus-body form.
 **D25 — there is no derived confidence field.** `Hit.tiers` exposes which
 retrievers matched; callers should not treat a rescaled score as a probability.
 
-**D27 — `@ignore` suppresses a reference; a predicate cannot.** Tree-sitter
-patterns are independent, so one pattern matching a node does not stop another
-from matching it too. A query that means "this identifier spells a keyword, not
-a use" writes a pattern capturing it as `@ignore`, and `extract` drops
-references at those byte ranges. Upstream's `(#is-not? local)` expresses the
-same idea through scope tracking that arrives with `locals.scm`; nothing here
-loads one, so that predicate never fires and must not be relied on.
+**D27 — a query rules an identifier out with `@ignore`.** Tree-sitter patterns
+are independent, so one matching a node does not stop another from matching it
+too; `extract` drops references at any byte range captured as `@ignore`.
+`(#is-not? local)` reads as the same thing but needs the scope tracking a
+`locals.scm` supplies, and none is loaded here, so it never fires.
 
 **D12 — raw source and query-shape weighting are one change, not two.**
 Raw text alone is *worse* than the distillation it replaced. The gain is
