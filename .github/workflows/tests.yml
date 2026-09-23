@@ -73,7 +73,7 @@ jobs:
           python -c "
           from repoglass.embeddings.backends import OnnxEmbedder
           from tests.test_embed_backends import OnnxEmbedderTests as t
-          OnnxEmbedder(t.MODEL)
+          OnnxEmbedder(t.MODEL, providers=t.PROVIDERS)
           "
 
       - name: tests

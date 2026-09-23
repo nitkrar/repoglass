@@ -114,6 +114,11 @@ class OnnxEmbedderTests(unittest.TestCase):
     so the suite stays offline-safe."""
 
     MODEL = "BAAI/bge-small-en-v1.5"
+    #: Not the configured default, which is webgpu and needs a device no
+    #: CI runner has. What these four assert is pooling and prefix, which
+    #: a provider does not change; which provider attaches is asserted
+    #: against a fake onnxruntime below.
+    PROVIDERS = "cpu"
 
     def setUp(self) -> None:
         try:
@@ -121,7 +126,9 @@ class OnnxEmbedderTests(unittest.TestCase):
         except ImportError:
             self.skipTest("onnxruntime not installed")
         try:
-            self.emb = embeddings.OnnxEmbedder(self.MODEL, local_only=True)
+            self.emb = embeddings.OnnxEmbedder(
+                self.MODEL, local_only=True, providers=self.PROVIDERS
+            )
         except Exception as exc:                     # not cached, no network
             self.skipTest(f"model unavailable: {type(exc).__name__}")
 
