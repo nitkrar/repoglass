@@ -78,31 +78,46 @@ jobs:
           repository: nitkrar/homebrew-tap
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
 
-      - name: point the formula at this tag
+      - name: point the formula at this sdist
         env:
           TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           version="${TAG#v}"
-          url="https://github.com/nitkrar/repoglass/archive/refs/tags/${TAG}.tar.gz"
-          sha=$(curl -fsSL "$url" | sha256sum | cut -d' ' -f1)
-          python3 - "$version" "$sha" <<'PY'
-          import re, sys
+          python3 - "$version" <<'PY'
+          import re, sys, time, urllib.request
 
-          version, sha = sys.argv[1], sys.argv[2]
+          version = sys.argv[1]
+          # The simple index, not the JSON API: the JSON one lags minutes
+          # behind an upload, and this job runs seconds after. It also
+          # carries the digest, so there is nothing to download and hash.
+          want = re.compile(
+              rf'(https://[^"#]*repoglass-{re.escape(version)}\.tar\.gz)'
+              r'#sha256=([0-9a-f]{64})'
+          )
+          for attempt in range(10):
+              index = urllib.request.urlopen(
+                  "https://pypi.org/simple/repoglass/"
+              ).read().decode()
+              found = want.search(index)
+              if found:
+                  break
+              time.sleep(6)
+          else:
+              sys.exit(f"{version} is not on the index after 60s")
+          url, sha = found.group(1), found.group(2)
+
           path = "Formula/repoglass.rb"
           src = open(path).read()
-
-          # The release tarball is the only github.com url in the file;
-          # every resource is files.pythonhosted.org. Anchoring on it keeps
-          # the 42 resource sha256 lines out of reach.
+          # Resources are other distributions, so the one file named
+          # repoglass-*.tar.gz is this formula's own source. Anchoring on
+          # it keeps the 42 resource sha256 lines out of reach.
           pat = re.compile(
-              r'(  url "https://github\.com/nitkrar/repoglass/archive/[^"]*"\n'
-              r'  sha256 ")[0-9a-f]{64}(")'
+              r'(  url "https://files\.pythonhosted\.org/[^"]*/'
+              r'repoglass-[0-9][^"]*\.tar\.gz"\n  sha256 ")[0-9a-f]{64}(")'
           )
           if len(pat.findall(src)) != 1:
               sys.exit(f"found {len(pat.findall(src))} release blocks, want 1")
 
-          url = f"https://github.com/nitkrar/repoglass/archive/refs/tags/v{version}.tar.gz"
           out = pat.sub(f'  url "{url}"\n  sha256 "{sha}"', src, count=1)
           if out == src:
               print("already at this release")
@@ -113,7 +128,7 @@ jobs:
               sys.exit(f"refusing to write: {moved} lines differ, want 2")
 
           open(path, "w").write(out)
-          print(f"formula -> v{version}")
+          print(f"formula -> {version}")
           PY
 
       - name: commit, once the diff is only the release
