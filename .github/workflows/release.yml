@@ -12,6 +12,7 @@ jobs:
       # Trusted publishing: PyPI verifies this workflow's OIDC identity, so no
       # API token exists to leak or rotate. Configured on pypi.org, not here.
       id-token: write
+      contents: write        # the release this tag becomes
 
     steps:
       - uses: actions/checkout@v4
@@ -43,3 +44,80 @@ jobs:
           }
 
       - uses: pypa/gh-action-pypi-publish@release/v1
+
+      - name: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" dist/* --generate-notes --title "$TAG"
+
+  brew:
+    name: point the tap at the new release
+    needs: pypi
+    runs-on: ubuntu-latest
+
+    steps:
+      # The tap is a second repository, which GITHUB_TOKEN is not scoped
+      # to. HOMEBREW_TAP_TOKEN is a PAT holding contents:write on it.
+      - uses: actions/checkout@v4
+        with:
+          repository: nitkrar/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+      - name: point the formula at this tag
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="${TAG#v}"
+          url="https://github.com/nitkrar/repoglass/archive/refs/tags/${TAG}.tar.gz"
+          sha=$(curl -fsSL "$url" | sha256sum | cut -d' ' -f1)
+          python3 - "$version" "$sha" <<'PY'
+          import re, sys
+
+          version, sha = sys.argv[1], sys.argv[2]
+          path = "Formula/repoglass.rb"
+          src = open(path).read()
+
+          # The release tarball is the only github.com url in the file;
+          # every resource is files.pythonhosted.org. Anchoring on it keeps
+          # the 42 resource sha256 lines out of reach.
+          pat = re.compile(
+              r'(  url "https://github\.com/nitkrar/repoglass/archive/[^"]*"\n'
+              r'  sha256 ")[0-9a-f]{64}(")'
+          )
+          if len(pat.findall(src)) != 1:
+              sys.exit(f"found {len(pat.findall(src))} release blocks, want 1")
+
+          url = f"https://github.com/nitkrar/repoglass/archive/refs/tags/v{version}.tar.gz"
+          out = pat.sub(f'  url "{url}"\n  sha256 "{sha}"', src, count=1)
+          if out == src:
+              print("already at this release")
+              raise SystemExit(0)
+
+          moved = sum(1 for a, b in zip(src.splitlines(), out.splitlines()) if a != b)
+          if moved != 2:
+              sys.exit(f"refusing to write: {moved} lines differ, want 2")
+
+          open(path, "w").write(out)
+          print(f"formula -> v{version}")
+          PY
+
+      - name: commit, once the diff is only the release
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if git diff --quiet; then
+            echo "formula already at ${TAG}, nothing to push"
+            exit 0
+          fi
+          # Resources pin the dependency tree, not repoglass, so a release
+          # leaves them alone. Anything else here is a bug in the rewrite,
+          # and pushing it would break `brew install`.
+          git diff --stat
+          expected="$(printf '2\t2\tFormula/repoglass.rb')"
+          test "$(git diff --numstat)" = "$expected"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "Update repoglass to ${TAG#v}"
+          git push
