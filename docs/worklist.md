@@ -2,6 +2,6 @@
 
 Current user-visible defects:
 
-- Elixir references include keywords such as `def` and `defmodule`, which crowd
-  real references out of the result.
-- Ruby references include parameter names, which do not navigate anywhere.
+- Ruby loses paren-less method calls. Distinguishing one from a local
+  read needs the scope tracking `(#is-not? local)` assumes, so the
+  reference query keeps only what the grammar already calls a call.

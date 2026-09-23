@@ -150,6 +150,13 @@ def extract(file: SourceFile, source: str, settings: Settings) -> Extraction:
     #: every `type_identifier`, including the one naming the type --
     #: and a definition is not a use of itself.
     named_here: set[tuple[int, int]] = set()
+    #: Nodes a query marked `@ignore`. One pattern cannot cancel the
+    #: match another pattern makes on the same node, so a query saying
+    #: "this identifier spells a keyword, not a use" has to say it in a
+    #: pattern of its own and have it honoured here.
+    ignored: set[tuple[int, int]] = {
+        (n.start_byte, n.end_byte) for n in captures.get("ignore", ())
+    }
     # Sorted, so which capture claims a node shared by two patterns is
     # the same on every run rather than whatever order the query
     # happened to return.
@@ -199,7 +206,7 @@ def extract(file: SourceFile, source: str, settings: Settings) -> Extraction:
         if not key.startswith("name.reference."):
             continue
         for n in nodes:
-            if (n.start_byte, n.end_byte) in named_here:
+            if (n.start_byte, n.end_byte) in named_here | ignored:
                 continue
             span = innermost(n.start_byte, n.end_byte)
             # The innermost definition containing this reference, which

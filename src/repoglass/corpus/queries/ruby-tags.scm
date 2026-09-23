@@ -57,8 +57,14 @@
 
 (call method: (identifier) @name.reference.call) @reference.call
 
+; A bare identifier is a paren-less call or a local read, and the
+; grammar does not say which. Upstream separates them with
+; `(#is-not? local)`, which needs the scope tracking that comes with
+; locals.scm; nothing here provides it, so the predicate never fired
+; and every parameter and local became a reference. Matching only what
+; the grammar already calls a call loses the paren-less ones and keeps
+; the result navigable, which is the point of a reference.
 (
-  [(identifier) (constant)] @name.reference.call @reference.call
-  (#is-not? local)
+  (constant) @name.reference.call @reference.call
   (#not-match? @name.reference.call "^(lambda|load|require|require_relative|__FILE__|__LINE__)$")
 )
