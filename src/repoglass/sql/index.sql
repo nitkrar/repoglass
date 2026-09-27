@@ -4,16 +4,13 @@ CREATE TABLE meta (
   embed_model    TEXT    NOT NULL,
   embed_backend  TEXT    NOT NULL DEFAULT 'static',
   embed_dims     INTEGER NOT NULL,
+  embed_variant  TEXT    NOT NULL DEFAULT '',
+  embed_doc_prefix TEXT  NOT NULL DEFAULT '',
+  embed_pooling  TEXT    NOT NULL DEFAULT '',
   coverage       TEXT    NOT NULL,
   extractor_rev  TEXT    NOT NULL,
   categories_rev TEXT    NOT NULL DEFAULT '',
-  -- Set in the same transaction as any write that changes what FTS5
-  -- should hold, and cleared by the rebuild. Chunks are committed
-  -- before the rebuild runs, so without this a run that dies between
-  -- the two leaves rows that are all present and an index that
-  -- matches nothing -- and the next walk, seeing no file changed,
-  -- never reaches the rebuild again.
-  fts_dirty      INTEGER NOT NULL DEFAULT 0,
+  chunking_rev   TEXT    NOT NULL DEFAULT '',
   last_scan_at   REAL    NOT NULL,
   last_skip_at   REAL
 );
@@ -71,29 +68,13 @@ CREATE TABLE chunk (
   end_line     INTEGER NOT NULL,   -- capped span, may be shorter than the symbol's
   text         TEXT NOT NULL,
   content_hash TEXT NOT NULL,
-  vec          BLOB,
-  -- Normally NULL: the view derives the FTS text from the path and the
-  -- span. Settings that reshape it further -- identifier splitting,
-  -- semble's enriched header -- are not expressible in SQL, so those
-  -- renderings are stored, and only those.
+  -- Normally NULL: the keyword text is the path words and the span.
+  -- Settings that reshape it further -- identifier splitting, semble's
+  -- enriched header -- are stored here, and only those.
   lexical_override TEXT
 );
 CREATE INDEX chunk_file   ON chunk(file_id);
 CREATE UNIQUE INDEX chunk_symbol ON chunk(symbol_id) WHERE symbol_id IS NOT NULL;
 
--- What FTS5 indexes: the humanised path followed by the chunk body.
--- A view rather than a column because the string is a concatenation of
--- two things already stored, and writing it down cost more than every
--- other column combined. Plain SQL, so the database stays readable by
--- anything that speaks SQLite.
-CREATE VIEW chunk_lexical AS
-  SELECT c.id AS rowid,
-         COALESCE(c.lexical_override, f.path_words || char(10) || c.text)
-           AS lexical_text
-    FROM chunk c JOIN file f ON f.id = c.file_id;
-
-CREATE VIRTUAL TABLE chunk_fts USING fts5(
-  lexical_text, content='chunk_lexical', content_rowid='rowid',
-  tokenize='unicode61'
-);
-
+-- Vectors and the keyword index live in semsift's `rg_*` tables in this
+-- database, one item per chunk with the chunk's id.

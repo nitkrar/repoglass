@@ -63,14 +63,9 @@ class DerivedByDefaultTests(LexicalStorageTestCase):
         self.idx.close()
         with closing(sqlite3.connect(self.db)) as conn:
             rows = conn.execute(
-                "SELECT count(*) FROM chunk_fts WHERE chunk_fts MATCH 'refund'"
+                "SELECT count(*) FROM rg_fts WHERE rg_fts MATCH 'refund'"
             ).fetchone()[0]
         self.assertGreater(rows, 0)
-
-    def test_the_index_agrees_with_its_content_source(self) -> None:
-        """FTS5's own check: re-derive from the view and compare."""
-        self.idx._store.conn.execute(
-            "INSERT INTO chunk_fts(chunk_fts, rank) VALUES('integrity-check', 1)")
 
     def test_camel_case_in_the_path_is_searchable(self) -> None:
         """unicode61 would leave `refundEngine` as one token; the
@@ -110,7 +105,7 @@ class NonDerivableRenderingTests(LexicalStorageTestCase):
         idx.close()
         with closing(sqlite3.connect(db)) as conn:
             conn.execute(
-                "SELECT count(*) FROM chunk_fts WHERE chunk_fts MATCH 'refund'")
+                "SELECT count(*) FROM rg_fts WHERE rg_fts MATCH 'refund'")
 
 
 if __name__ == "__main__":

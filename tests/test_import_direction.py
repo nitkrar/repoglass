@@ -14,9 +14,9 @@ ALLOWED: dict[str, set[str]] = {
     "text": set(),              # string normalisation; both corpus and store need it
     "config": {"models"},       # type aliases are domain vocabulary
     "corpus": {"models", "config", "text"},
-    "embeddings": {"models", "config"},
+    "embeddings": {"config"},
     "store": {"models", "config", "text"},
-    "search": {"models", "config", "store", "embeddings"},
+    "search": {"models", "config", "store"},
     "index": {"models", "config", "corpus", "embeddings", "store", "search",
               "text"},
     # Above index: a consumer of the public surface, imported by nothing.

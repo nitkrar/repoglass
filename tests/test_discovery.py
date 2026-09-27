@@ -1,9 +1,6 @@
-"""Walk, exclusion, classification.
-
-The symlink tests are not hypothetical: a cyclic directory symlink makes an
-unbounded walk escape the tree entirely, and a broken one raises mid-walk
-from inside a read method.
-"""
+"""repoglass's walk rules on top of semsift's discover: which settings and
+ignore files it passes, and what it drops afterwards. Ignore-file and
+symlink semantics are semsift's and tested there."""
 
 from __future__ import annotations
 
@@ -58,25 +55,6 @@ class BasicWalkTests(WalkTestCase):
         (self.root / "gen" / "out.py").write_text("y=1\n")
         (self.root / ".repoglassignore").write_text("gen/\n")
         self.assertEqual({"src/a.py", "README.md"}, self.walked())
-
-
-class SymlinkTests(WalkTestCase):
-    def test_cyclic_directory_symlink_terminates(self) -> None:
-        """`sub/up -> ../..` escapes the tree under follow_symlinks=True."""
-        (self.root / "sub").mkdir()
-        os.symlink("../..", self.root / "sub" / "up")
-        files = self.walked()
-        self.assertEqual({"src/a.py", "README.md"}, files)
-
-    def test_broken_symlink_does_not_raise(self) -> None:
-        os.symlink("/nonexistent/target", self.root / "dangling.py")
-        self.walked()    # must not raise
-
-    def test_symlinked_file_indexes_once(self) -> None:
-        """A link and its target are the same content under one path."""
-        os.symlink("a.py", self.root / "src" / "alias.py")
-        files = self.walked()
-        self.assertEqual(1, sum(1 for f in files if f.endswith(".py")))
 
 
 class ClassificationTests(WalkTestCase):
@@ -163,121 +141,11 @@ class RepoglassignoreOverridesGitignoreTests(WalkTestCase):
         (self.root / "junk.py").write_text("def junk(): pass\n")
         (self.root / ".gitignore").write_text("generated.py\njunk.py\n")
 
-    def test_without_an_override_both_are_skipped(self) -> None:
-        got = self.walked()
-        self.assertNotIn("generated.py", got)
-        self.assertNotIn("junk.py", got)
-
     def test_a_negation_rescues_one_of_them(self) -> None:
         (self.root / ".repoglassignore").write_text("!generated.py\n")
         got = self.walked()
         self.assertIn("generated.py", got)
         self.assertNotIn("junk.py", got)
-
-    def test_repoglassignore_still_excludes(self) -> None:
-        (self.root / ".repoglassignore").write_text("src/\n")
-        self.assertNotIn("src/a.py", self.walked())
-
-
-class IgnoreCompositionTests(WalkTestCase):
-    """Excluded is the union of .gitignore and .repoglassignore.
-
-    Both are per-repository exclusion mechanisms, concatenated into a
-    single gitignore-syntax spec with .gitignore first, so the union
-    holds and .repoglassignore settles any disagreement.
-    """
-
-    def setUp(self) -> None:
-        super().setUp()
-        (self.root / "from_git.py").write_text("def a(): pass\n")
-        (self.root / "from_ours.py").write_text("def b(): pass\n")
-        (self.root / ".gitignore").write_text("from_git.py\n")
-        (self.root / ".repoglassignore").write_text("from_ours.py\n")
-
-    def test_the_excluded_set_is_the_union(self) -> None:
-        got = self.walked()
-        self.assertNotIn("from_git.py", got)
-        self.assertNotIn("from_ours.py", got)
-        self.assertIn("src/a.py", got)
-
-    def test_repoglassignore_settles_a_disagreement(self) -> None:
-        """Later file wins, so `!` re-admits what .gitignore excluded."""
-        (self.root / ".repoglassignore").write_text("!from_git.py\n")
-        self.assertIn("from_git.py", self.walked())
-
-    def test_repoglassignore_applies_with_gitignore_off(self) -> None:
-        got = self.walked(Settings(gitignore=False))
-        self.assertIn("from_git.py", got)       # .gitignore not consulted
-        self.assertNotIn("from_ours.py", got)   # ours still is
-
-    def test_neither_file_present_excludes_nothing(self) -> None:
-        (self.root / ".gitignore").unlink()
-        (self.root / ".repoglassignore").unlink()
-        got = self.walked()
-        self.assertIn("from_git.py", got)
-        self.assertIn("from_ours.py", got)
-
-    def _vendored(self, gitignore: str, ours: str) -> set[str]:
-        (self.root / "vendor").mkdir(exist_ok=True)
-        (self.root / "vendor" / "keep.py").write_text("def keep(): pass\n")
-        (self.root / "vendor" / "junk.py").write_text("def junk(): pass\n")
-        (self.root / ".gitignore").write_text(gitignore)
-        (self.root / ".repoglassignore").write_text(ours)
-        return self.walked()
-
-    def test_an_ignored_directory_is_pruned_as_git_does(self) -> None:
-        """`git check-ignore` agrees: with `vendor/` excluded, nothing
-        under it can be re-included. Pruning the directory is also what
-        keeps the walk out of large vendored trees."""
-        got = self._vendored("vendor/\n", "!vendor/keep.py\n")
-        self.assertNotIn("vendor/keep.py", got)
-        self.assertNotIn("vendor/junk.py", got)
-
-    def test_gits_own_idiom_rescues_one_file(self) -> None:
-        """`vendor/*` matches the contents, not the directory, so the
-        walk descends and the negation can re-admit one file."""
-        got = self._vendored("vendor/*\n", "!vendor/keep.py\n")
-        self.assertIn("vendor/keep.py", got)
-        self.assertNotIn("vendor/junk.py", got)
-
-
-class NestedIgnoreFileTests(WalkTestCase):
-    """Ignore files are per-directory and inherit downward, as in git.
-
-    A package-local ignore file must affect its package without
-    leaking to siblings, and reading only the root file would drop
-    that contract.
-    """
-
-    def setUp(self) -> None:
-        super().setUp()
-        pkg = self.root / "packages" / "foo"
-        pkg.mkdir(parents=True)
-        (pkg / "gen.py").write_text("def gen(): pass\n")
-        (pkg / "real.py").write_text("def real(): pass\n")
-        (self.root / "packages" / "bar").mkdir()
-        (self.root / "packages" / "bar" / "gen.py").write_text("def g(): pass\n")
-
-    def test_a_nested_gitignore_applies_in_its_own_directory(self) -> None:
-        (self.root / "packages" / "foo" / ".gitignore").write_text("gen.py\n")
-        got = self.walked()
-        self.assertNotIn("packages/foo/gen.py", got)
-        self.assertIn("packages/foo/real.py", got)
-
-    def test_it_does_not_leak_to_a_sibling(self) -> None:
-        (self.root / "packages" / "foo" / ".gitignore").write_text("gen.py\n")
-        self.assertIn("packages/bar/gen.py", self.walked())
-
-    def test_a_root_pattern_still_reaches_nested_files(self) -> None:
-        (self.root / ".gitignore").write_text("gen.py\n")
-        got = self.walked()
-        self.assertNotIn("packages/foo/gen.py", got)
-        self.assertNotIn("packages/bar/gen.py", got)
-
-    def test_a_nested_repoglassignore_works_too(self) -> None:
-        (self.root / "packages" / "foo" / ".repoglassignore").write_text("gen.py\n")
-        self.assertNotIn("packages/foo/gen.py", self.walked())
-
 
 class GeneratedFileTests(unittest.TestCase):
     """A file whose typical line is enormous was not written by hand.

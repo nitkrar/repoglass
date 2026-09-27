@@ -83,7 +83,6 @@ class DeletionTests(StoreTestCase):
         self.store.upsert_files([_file()])
         self.store.replace_symbols("a.py", [_sym("foo")])
         self.store.upsert_chunks("a.py", [_chunk("foo")])
-        self.store.rebuild_fts()
 
         self.store.delete_files(["a.py"])
 
@@ -102,7 +101,6 @@ class FtsTests(StoreTestCase):
             _chunk("unlock", 'raise ValueError("vault is already unlocked")'),
             _chunk("other", "completely unrelated payment invoice text"),
         ])
-        self.store.rebuild_fts()
 
     def test_finds_a_string_literal(self) -> None:
         """The reason FTS5 indexes raw source rather than distilled text."""
@@ -117,11 +115,10 @@ class FtsTests(StoreTestCase):
         span = self.store.chunk_span(best)
         self.assertIsNotNone(span)
 
-    def test_rebuild_drops_deleted_content(self) -> None:
-        """Stale FTS rows would return chunks that no longer exist."""
+    def test_deleting_a_file_drops_its_keyword_rows(self) -> None:
+        """Stale rows would return chunks that no longer exist."""
         self._seed()
         self.store.delete_files(["a.py"])
-        self.store.rebuild_fts()
         self.assertEqual([], self.store.fts_search("unlocked", limit=10, mode="all"))
 
 
@@ -228,19 +225,6 @@ class DuplicateCaptureTests(StoreTestCase):
 
 
 class QueryHelperTests(StoreTestCase):
-    def test_pending_vectors_returns_unembedded_chunks(self) -> None:
-        self.store.upsert_files([_file()])
-        self.store.replace_symbols("a.py", [_sym("alpha")])
-        self.store.upsert_chunks("a.py", [_chunk("alpha", "embed this chunk")])
-
-        rows = self.store.pending_vectors()
-
-        self.assertEqual(1, len(rows))
-        cid, text = rows[0]
-        self.assertEqual("embed this chunk", text)
-        self.store.set_vectors([(cid, b"\x00\x00\x80\x3f")])
-        self.assertEqual([], self.store.pending_vectors())
-
     def test_set_embed_dims_updates_identity(self) -> None:
         self.store.set_embed_dims(16)
         self.assertEqual(16, self.store.identity().embed_dims)
@@ -302,59 +286,33 @@ class QueryHelperTests(StoreTestCase):
         )
 
 
-class VectorCacheTests(StoreTestCase):
-    """Writers that change chunks must invalidate the cached matrix."""
+class ItemSyncTests(StoreTestCase):
+    """Every writer that drops chunks drops their semsift items too."""
 
     def _seed(self) -> None:
         self.store.upsert_files([_file()])
         self.store.replace_symbols("a.py", [_sym("alpha")])
-        self.store.upsert_chunks("a.py", [_chunk("alpha")])
-        cid = self.store.conn.execute("SELECT id FROM chunk").fetchone()[0]
-        self.store.set_vectors([(cid, b"\x00\x00\x80\x3f")])
+        self.store.upsert_chunks("a.py", [_chunk("alpha", "alpha refund ledger text")])
 
-    def test_a_repeat_read_does_not_hit_the_database(self) -> None:
-        self._seed()
-        first = self.store.vectors(mode="all")
-        self.store.conn.execute("DELETE FROM chunk")   # behind the cache's back
-        self.assertEqual(first, self.store.vectors(mode="all"))
+    def found(self) -> list[int]:
+        return [i for i, _ in self.store.fts_search("refund", limit=10, mode="all")]
 
-    def test_set_vectors_invalidates(self) -> None:
+    def test_rewriting_a_files_chunks_replaces_its_items(self) -> None:
         self._seed()
-        self.assertEqual(1, len(self.store.vectors(mode="all")[0]))
-        self.store.conn.execute("DELETE FROM chunk")
-        self.store.set_vectors([])
-        self.assertEqual(0, len(self.store.vectors(mode="all")[0]))
+        first = self.found()
+        self.store.upsert_chunks("a.py", [_chunk("alpha", "alpha refund ledger again")])
+        second = self.found()
+        self.assertEqual(1, len(second))
+        self.assertNotEqual(first, second)
 
-    def test_deleting_a_file_invalidates(self) -> None:
-        self._seed()
-        self.assertEqual(1, len(self.store.vectors(mode="all")[0]))
-        self.store.delete_files(["a.py"])
-        self.assertEqual(0, len(self.store.vectors(mode="all")[0]))
-
-    def test_upserting_chunks_invalidates(self) -> None:
-        self._seed()
-        self.assertEqual(1, len(self.store.vectors(mode="all")[0]))
-        self.store.upsert_chunks("a.py", [])
-        self.assertEqual(0, len(self.store.vectors(mode="all")[0]))
-
-    def test_replacing_symbols_invalidates(self) -> None:
-        """The cascade from symbol to chunk drops vectors too."""
-        self._seed()
-        self.assertEqual(1, len(self.store.vectors(mode="all")[0]))
-        self.store.replace_symbols("a.py", [])
-        self.assertEqual(0, len(self.store.vectors(mode="all")[0]))
-
-    def test_reset_content_invalidates(self) -> None:
-        self._seed()
-        self.assertEqual(1, len(self.store.vectors(mode="all")[0]))
-        self.store.reset_content()
-        self.assertEqual(0, len(self.store.vectors(mode="all")[0]))
-
-    def test_modes_are_cached_separately(self) -> None:
-        self._seed()
-        self.assertEqual(1, len(self.store.vectors(mode="all")[0]))
-        self.assertEqual(0, len(self.store.vectors(mode="docs")[0]))
-        self.assertEqual(1, len(self.store.vectors(mode="all")[0]))
+    def test_every_removal_path_drops_the_items(self) -> None:
+        for remove in (lambda: self.store.delete_files(["a.py"]),
+                       lambda: self.store.upsert_chunks("a.py", []),
+                       lambda: self.store.reset_content()):
+            self._seed()
+            self.assertTrue(self.found())
+            remove()
+            self.assertEqual([], self.found())
 
 
 class SchemaFileTests(unittest.TestCase):
@@ -363,7 +321,6 @@ class SchemaFileTests(unittest.TestCase):
     def test_the_ddl_is_readable_as_package_data(self) -> None:
         text = store_mod.schema_sql()
         self.assertIn("CREATE TABLE meta", text)
-        self.assertIn("CREATE VIRTUAL TABLE chunk_fts", text)
 
     def test_the_revision_tracks_the_file(self) -> None:
         """`schema_rev` must hash what is executed, or a schema edit

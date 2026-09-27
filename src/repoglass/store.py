@@ -14,6 +14,10 @@ from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Iterable, Sequence
 
+
+from semsift.store import Field as ItemField, Item, Store as Items
+from semsift.store import filters as sf
+
 from .config import Settings, categories_rev
 from .models import Chunk, SearchMode, SourceFile, Symbol
 from .text import humanise
@@ -94,21 +98,37 @@ class Identity:
     #: walk time, so editing `doc_languages` or `test_markers` must
     #: reclassify; without this the stored value silently goes stale.
     categories_rev: str = ""
+    #: The rest of the vector space: same model and width, different
+    #: variant, document prefix or pooling, is still a different space.
+    embed_variant: str = ""
+    embed_doc_prefix: str = ""
+    embed_pooling: str = ""
+    chunking_rev: str = ""
 
 
 #: Fields that invalidate stored chunks and vectors.
 _REINDEX_FIELDS = ("schema_rev", "embed_model", "embed_backend",
                    "embed_dims", "coverage", "extractor_rev",
-                   "categories_rev")
+                   "categories_rev", "embed_variant", "embed_doc_prefix",
+                   "embed_pooling", "chunking_rev")
+
+
+#: What each semsift item carries so repoglass's filters apply before
+#: both searches: a chunk's file category, language and path.
+ITEM_FIELDS = (ItemField("content_type", "text", indexed=True),
+               ItemField("lang", "text", indexed=True),
+               ItemField("path", "text", indexed=True))
 
 
 class Store:
     def __init__(self, conn: sqlite3.Connection, settings: Settings) -> None:
         self.conn = conn
         self._settings = settings
-        # (content, langs, include, exclude) -> (ids, packed blob).
-        # See `vectors`.
-        self._vector_cache: dict[str, tuple[list[int], bytes]] = {}
+        #: Chunks as semsift items: the keyword index, and vectors once
+        #: embedded. This handle has no encoder, so opening a store never
+        #: loads a model; `_vector_items` adds one when a model is needed.
+        self.items = Items(conn, "rg", ITEM_FIELDS)
+        self._vector_items: dict[int, Items] = {}
         #: Depth of nested `transaction()` blocks. Writers commit on
         #: their own at zero and defer above it.
         self._depth = 0
@@ -131,12 +151,15 @@ class Store:
         unchanged, so the walk sees neither an addition nor an edit.
         """
         self._depth += 1
+        # semsift writes only inside an open transaction, and the sqlite3
+        # module opens one implicitly only before its own first write.
+        if self._depth == 1 and not self.conn.in_transaction:
+            self.conn.execute("BEGIN")
         try:
             yield
         except BaseException:
             if self._depth == 1:
                 self.conn.rollback()
-                self._invalidate_vectors()
             raise
         finally:
             self._depth -= 1
@@ -151,7 +174,6 @@ class Store:
     def close(self) -> None:
         """Release the connection. Safe to call more than once."""
         self._finalize()
-        self._vector_cache.clear()
 
     def __enter__(self) -> "Store":
         return self
@@ -233,10 +255,13 @@ class Store:
         self._commit()
 
     def delete_files(self, paths: Iterable[str]) -> int:
+        paths = list(paths)
         cur = self.conn.executemany("DELETE FROM file WHERE path = ?",
                                     [(p,) for p in paths])
-        self._invalidate_vectors()
-        self._mark_fts_dirty()
+        for start in range(0, len(paths), 500):
+            stale = self.items.select_ids(sf.in_("path", paths[start:start + 500]))
+            if stale:
+                self.items.remove(stale)
         self._commit()
         return cur.rowcount
 
@@ -285,7 +310,6 @@ class Store:
             [(fid, s.name, s.tag, s.start_line, s.end_line, enclosing_id(s))
              for s in references],
         )
-        self._invalidate_vectors()
         self._commit()
 
     def upsert_chunks(self, path: str, chunks: Sequence[Chunk]) -> None:
@@ -333,22 +357,28 @@ class Store:
             " text, content_hash, lexical_override) VALUES (?,?,?,?,?,?,?)",
             rows,
         )
-        self._invalidate_vectors()
-        self._mark_fts_dirty()
-        self._commit()
-
-    def set_vectors(self, vectors: Sequence[tuple[int, bytes]]) -> None:
-        self.conn.executemany("UPDATE chunk SET vec=? WHERE id=?",
-                              [(v, sid) for sid, v in vectors])
-        self._invalidate_vectors()
+        # The file's old items carry ids of chunks just deleted; its path
+        # finds them all, including those a symbol cascade already took.
+        stale = self.items.select_ids(sf.eq("path", path))
+        if stale:
+            self.items.remove(stale)
+        items = [
+            Item(cid, text, {"content_type": content_type, "lang": lang, "path": path},
+                 keyword_text=override if override is not None else f"{words}\n{text}")
+            for cid, text, override, words, content_type, lang in self.conn.execute(
+                "SELECT c.id, c.text, c.lexical_override, f.path_words,"
+                " f.content_type, f.lang FROM chunk c JOIN file f ON f.id = c.file_id"
+                " WHERE c.file_id = ? ORDER BY c.id", (fid,))
+        ]
+        if items:
+            self.items.upsert(items)
         self._commit()
 
     def reset_content(self) -> None:
         """Drop every indexed row, keeping meta. Used when identity changes."""
         self.conn.execute("DELETE FROM file")
-        self._invalidate_vectors()
+        self.items.clear()
         self._commit()
-        self.rebuild_fts()
 
     def set_identity(self, current: "Identity") -> None:
         """Persist every field `needs_reindex` compares.
@@ -367,34 +397,6 @@ class Store:
             tuple(getattr(current, name) for name in names),
         )
         self._commit()
-
-    def fts_dirty(self) -> bool:
-        """Whether a write has landed that the FTS index has not seen."""
-        row = self.conn.execute("SELECT fts_dirty FROM meta WHERE id=1").fetchone()
-        return bool(row and row[0])
-
-    def _mark_fts_dirty(self) -> None:
-        """Called by every writer that changes what FTS5 should hold.
-
-        Inside the caller's transaction, so a rollback takes the flag
-        with the rows it describes.
-        """
-        self.conn.execute("UPDATE meta SET fts_dirty=1 WHERE id=1")
-
-    def rebuild_fts(self) -> None:
-        """Wholesale rather than trigger-based.
-
-        External-content FTS5 needs an order-sensitive delete-before-insert
-        protocol that corrupts silently when violated; rebuild cannot.
-
-        Clearing the flag is part of the same transaction as the
-        rebuild: cleared first, a crash would lose the record that
-        the work is still outstanding.
-        """
-        with self.transaction():
-            self.conn.execute(
-                "INSERT INTO chunk_fts(chunk_fts) VALUES('rebuild')")
-            self.conn.execute("UPDATE meta SET fts_dirty=0 WHERE id=1")
 
     def known_files(self) -> dict[str, tuple[int, int]]:
         return {
@@ -576,76 +578,65 @@ class Store:
                           for w in sorted(wanted))
         return f" AND f.content_type IN ({marks})"
 
+    def _filter(self, mode, lang=None, include=None, exclude=None):
+        """repoglass's content, language and path arguments as a semsift filter.
+
+        Applied before both searches, so `k` results are `k` results
+        inside the filter rather than `k` retrieved and then thinned.
+        Paths match with SQLite GLOB, so `*` crosses `/` and `src/*` is
+        recursive; an exclusion wins over an inclusion.
+        """
+        parts = []
+        wanted = normalise_content(mode, self._settings)
+        if wanted:
+            parts.append(sf.in_("content_type", sorted(wanted)))
+        langs = self._langs(lang)
+        if langs:
+            parts.append(sf.in_("lang", list(langs)))
+        included = self._langs(include)
+        if included:
+            parts.append(sf.or_(*(sf.glob("path", pat) for pat in included)))
+        parts.extend(sf.not_(sf.glob("path", pat)) for pat in self._langs(exclude))
+        if not parts:
+            return None
+        return parts[0] if len(parts) == 1 else sf.and_(*parts)
+
     def fts_search(self, query: str, *, limit: int, mode: SearchMode,
                    lang=None, include=None, exclude=None
                    ) -> list[tuple[int, float]]:
-        """Returns (chunk_id, bm25_score). bm25() is negative, ascending-best.
+        """(chunk_id, bm25) for any of `query`'s words; bm25 is lower-is-better."""
+        ranked = self.items.search_keyword(query, limit,
+                                           self._filter(mode, lang, include, exclude))
+        return [(s.id, s.raw) for s in ranked.items]
 
-        Joined through `chunk.file_id` rather than through `symbol`: a
-        window chunk has no symbol, and an inner join via symbol would
-        silently drop every one of them.
-        """
-        sql = (
-            "SELECT t.rowid, bm25(chunk_fts) FROM chunk_fts t"
-            " JOIN chunk c ON c.id = t.rowid"
-            " JOIN file f ON f.id = c.file_id"
-            " WHERE chunk_fts MATCH ?" + self._mode_clause(mode)
-            + self._lang_clause(lang)
-            + self._path_clause(include)
-            + self._exclude_clause(exclude) +
-            " ORDER BY bm25(chunk_fts) LIMIT ?"
-        )
-        try:
-            return list(self.conn.execute(sql, (query, limit)))
-        except sqlite3.OperationalError:
-            return []    # malformed MATCH expression
+    def vector_search(self, encoder, query: str, *, limit: int, mode: SearchMode,
+                      lang=None, include=None, exclude=None):
+        """semsift's ranked list by cosine; raises StaleVectors when the model moved."""
+        return self._vector_handle(encoder).search_vector(
+            query, limit, self._filter(mode, lang, include, exclude))
 
-    def pending_vectors(self) -> list[tuple[int, str]]:
-        return list(self.conn.execute(
-            "SELECT id, text FROM chunk WHERE vec IS NULL"
-        ))
+    def _vector_handle(self, encoder) -> Items:
+        handle = self._vector_items.get(id(encoder))
+        if handle is None:
+            handle = Items(self.conn, "rg", ITEM_FIELDS, encoder=encoder)
+            self._vector_items = {id(encoder): handle}
+        return handle
+
+    def embed_missing(self, encoder) -> int:
+        """Embed every chunk without a vector; the model runs outside the transaction."""
+        ids = self.items.missing_vectors()
+        if not ids:
+            return 0
+        handle = self._vector_handle(encoder)
+        records = self.items.fetch(ids, {"text"})
+        vectors = handle.embed([Item(i, records[i].text) for i in ids])
+        with self.transaction():
+            handle.add_vectors(ids, vectors)
+        return len(ids)
 
     def set_embed_dims(self, dims: int) -> None:
         self.conn.execute("UPDATE meta SET embed_dims=? WHERE id=1", (dims,))
         self._commit()
-
-    def vectors(self, *, mode: SearchMode, lang=None, include=None,
-                exclude=None) -> tuple[list[int], bytes]:
-        """Every stored vector for `mode`, as ids plus one packed blob.
-
-        Cached in memory per filter combination: uncached, re-reading
-        the whole `vec` column dominates the tier pass and dwarfs the
-        dot product it feeds. SQLite stays the store of record; this is
-        only a read-through cache.
-
-        Invalidated by `_invalidate_vectors`, called from every writer
-        that can change the set: `set_vectors`, `upsert_chunks`,
-        `delete_files`, `replace_symbols` (its cascade drops chunks) and
-        `reset_content`.
-        """
-        # Keyed by the normalised categories, not the caller's argument:
-        # `mode` may arrive as a list (argparse nargs="+"), which is
-        # unhashable, and ("code",) must hit the same entry as "code".
-        key = (normalise_content(mode, self._settings), self._langs(lang),
-               self._langs(include), self._langs(exclude))
-        hit = self._vector_cache.get(key)
-        if hit is not None:
-            return hit
-        sql = ("SELECT c.id, c.vec FROM chunk c"
-               " JOIN file f ON f.id = c.file_id"
-               " WHERE c.vec IS NOT NULL" + self._mode_clause(mode)
-               + self._lang_clause(lang)
-               + self._path_clause(include)
-               + self._exclude_clause(exclude) +
-               " ORDER BY c.id")
-        ids: list[int] = []
-        blobs: list[bytes] = []
-        for cid, vec in self.conn.execute(sql):
-            ids.append(cid)
-            blobs.append(vec)
-        loaded = (ids, b"".join(blobs))
-        self._vector_cache[key] = loaded
-        return loaded
 
     def hits(self, ids: Sequence[int]) -> dict[int, tuple]:
         """Everything a result needs, in one statement.
@@ -720,10 +711,6 @@ class Store:
                f" WHERE ({where})" + self._mode_clause(mode)
                + f" LIMIT {int(limit)}")
         return list(self.conn.execute(sql, args))
-
-    def _invalidate_vectors(self) -> None:
-        """Drop the cached matrices. Cheap; they reload on next read."""
-        self._vector_cache.clear()
 
     def chunk_span(self, chunk_id: int) -> tuple[str, int, int] | None:
         """The CHUNK's span, not the symbol's.

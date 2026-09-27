@@ -9,7 +9,6 @@ ENV_PREFIX = "REPOGLASS_"
 
 # Fixed values. Not in Settings because changing them invalidates
 # indexes on disk or has no sensible per-repository answer.
-RRF_K = 60
 MIN_CHUNK_CHARS = 60          # shorter spans are navigable, not retrievable
 #: Upper bound on one chunk's text. `max_chunk_lines` says nothing
 #: about a minified file, where every definition on the one long line
@@ -22,11 +21,6 @@ MAX_CHUNK_CHARS = 20_000
 NEVER_INDEX_LANGS = frozenset({"pem"})
 DATA_DIR_NAME = ".repoglass"
 IGNORE_FILE_NAME = ".repoglassignore"
-#: On-disk width of one vector component. Components of a
-#: unit-normalised vector lie in [-1, 1], which float16 resolves finer
-#: than the score gaps ranking turns on, at half the bytes. Changing it
-#: makes every stored vector unreadable.
-VECTOR_DTYPE = "float16"
 #: Overrides `Paths.home`. Named here beside ENV_PREFIX so the two
 #: environment names are declared together.
 HOME_ENV = "REPOGLASS_HOME"
@@ -157,8 +151,7 @@ class Settings:
     lexical_mode: Literal["full", "capped", "contentless"] = "full"
     lexical_cap_chars: int = 2_000      # lexical_mode="capped" only
     #: Build the FTS input as span + stem + stem + dirs instead of
-    #: humanised-path + span. Changes the index, so it forces a
-    #: reindex via extractor identity.
+    #: humanised-path + span. Changing it forces a reindex.
     lexical_enrich: bool = False
     #: Append or inline the sub-words of compound identifiers, so
     #: "handler" can match `HandlerStack` -- FTS5's unicode61 tokenizer
@@ -198,6 +191,25 @@ class Settings:
     #: re-stat-ing files that have not changed. Edits are still picked
     #: up, just at most this often.
     rescan_after_seconds: int = 5
+
+
+#: Settings that shape a stored chunk: its span, its embedded text, or
+#: its lexical text.
+CHUNKING_FIELDS = ("max_chunk_lines", "window_chars", "distill_docs",
+                   "lexical_mode", "lexical_cap_chars", "lexical_enrich",
+                   "split_identifiers")
+
+
+def chunking_rev(settings: Settings) -> str:
+    """Fingerprint of `CHUNKING_FIELDS`, part of the index identity.
+
+    Chunks are rebuilt only for files that changed, so without this an
+    edited setting reaches new files and never the rest.
+    """
+    import hashlib
+
+    joined = chr(31).join(repr(getattr(settings, f)) for f in CHUNKING_FIELDS)
+    return hashlib.blake2b(joined.encode(), digest_size=8).hexdigest()
 
 
 def categories_rev(settings: Settings) -> str:

@@ -50,10 +50,201 @@ class F2_IdentityChangeForcesReindex(Fixture):
         other.refresh()
         widths = {
             len(v) for (v,) in other._store.conn.execute(
-                "SELECT vec FROM chunk WHERE vec IS NOT NULL"
+                "SELECT vec FROM rg_vectors"
             )
         }
         self.assertLessEqual(len(widths), 1, f"mixed vector widths: {widths}")
+
+
+    def test_changing_the_document_prefix_re_embeds(self) -> None:
+        """Same model, same width, different document prefix: the old
+        vectors sit in another region of the space and must not stay."""
+        from unittest import mock
+
+        from semsift.embed import FakeEncoder
+        from semsift.store.codec import pack
+
+        body = ("def alpha():\n    # long enough to be a retrievable chunk\n"
+                "    return 'a value here to pass the minimum chunk size'\n")
+        self.write("a.py", body)
+
+        def vectors_after(prefix: str) -> list[bytes]:
+            settings = Settings(embed_backend="static", embed_doc_prefix=prefix)
+            with mock.patch("repoglass.index.build_embedder",
+                            return_value=FakeEncoder(dims=8, doc_prefix=prefix)):
+                idx = self.open_index(settings)
+                idx.refresh()
+                rows = idx._store.conn.execute(
+                    "SELECT i.text, v.vec FROM rg_vectors v JOIN rg_items i ON i.id = v.id").fetchall()
+                idx.close()
+            self.assertTrue(rows)
+            fresh = FakeEncoder(dims=8, doc_prefix=prefix)
+            for text, vec in rows:
+                self.assertEqual(pack(fresh.encode([text])[0]), vec, prefix)
+            return [vec for _, vec in rows]
+
+        before = vectors_after("old: ")
+        self.assertNotEqual(before, vectors_after("new: "))
+
+    def test_a_changed_variant_is_probed_before_the_old_index_is_reset(self) -> None:
+        """If the replacement backend cannot load, the last complete index
+        remains usable rather than being replaced by unembedded rows."""
+        from unittest import mock
+
+        from semsift.embed import FakeEncoder
+
+        body = ("def alpha():\n    # long enough to be a retrievable chunk\n"
+                "    return 'a value here to pass the minimum chunk size'\n")
+        self.write("a.py", body)
+        before = Settings(embed_backend="http", embed_endpoint="http://old")
+        with mock.patch("repoglass.index.build_embedder",
+                        return_value=FakeEncoder(dims=8)):
+            idx = self.open_index(before)
+            idx.refresh()
+            idx.close()
+
+        after = Settings(embed_backend="http", embed_endpoint="http://new")
+        with mock.patch("repoglass.index.build_embedder",
+                        side_effect=OSError("replacement backend unavailable")):
+            idx = self.open_index(after)
+            with self.assertRaises(OSError):
+                idx.refresh()
+            stored = idx._store.identity()
+            vectors = idx._store.conn.execute(
+                "SELECT count(*) FROM rg_vectors").fetchone()[0]
+            idx.close()
+        self.assertEqual("http://old", stored.embed_variant)
+        self.assertGreater(vectors, 0)
+
+
+class EmbeddingRecovery(Fixture):
+    """Chunks commit before they are embedded, so a failed embed must be
+    retried by a later refresh even when no file has changed."""
+
+    def test_a_failed_embed_is_retried_on_the_next_refresh(self) -> None:
+        from unittest import mock
+
+        from semsift.embed import FakeEncoder
+
+        class Failing(FakeEncoder):
+            def _encode(self, texts):
+                raise OSError("embedding server down")
+
+        self.write("a.py", "def alpha():\n    # long enough to be a retrievable chunk\n"
+                           "    return 'a value here to pass the minimum chunk size'\n")
+        settings = Settings(embed_backend="static")
+        with mock.patch("repoglass.index.build_embedder", return_value=Failing()):
+            idx = self.open_index(settings)
+            with self.assertRaises(OSError):
+                idx.refresh()
+            idx.close()
+        with mock.patch("repoglass.index.build_embedder", return_value=FakeEncoder()):
+            idx = self.open_index(settings)
+            idx.refresh()
+            missing = idx._store.conn.execute(
+                "SELECT count(*) FROM rg_items i LEFT JOIN rg_vectors v ON v.id = i.id WHERE v.id IS NULL").fetchone()[0]
+            total = idx._store.conn.execute("SELECT count(*) FROM chunk").fetchone()[0]
+            idx.close()
+        self.assertGreater(total, 0)
+        self.assertEqual(0, missing)
+
+    def test_a_settled_index_does_not_build_the_embedder(self) -> None:
+        """Checking for pending vectors must not load a model when there
+        are none."""
+        from unittest import mock
+
+        from semsift.embed import FakeEncoder
+
+        self.write("a.py", "def alpha():\n    # long enough to be a retrievable chunk\n"
+                           "    return 'a value here to pass the minimum chunk size'\n")
+        settings = Settings(embed_backend="static")
+        with mock.patch("repoglass.index.build_embedder",
+                        return_value=FakeEncoder()) as build:
+            idx = self.open_index(settings)
+            idx.refresh()
+            idx.close()
+            build.reset_mock()
+            idx = self.open_index(settings)
+            idx.refresh()
+            idx.close()
+        build.assert_not_called()
+
+    def test_an_incomplete_embedding_batch_is_not_partly_attached(self) -> None:
+        from unittest import mock
+
+        from semsift.embed import FakeEncoder
+
+        class Dropping(FakeEncoder):
+            def _encode(self, texts):
+                return super()._encode(texts)[:-1]
+
+        for name in ("alpha", "beta"):
+            self.write(
+                f"{name}.py",
+                f"def {name}():\n    # long enough to be a retrievable chunk\n"
+                "    return 'a value here to pass the minimum chunk size'\n")
+        with mock.patch("repoglass.index.build_embedder",
+                        return_value=Dropping()):
+            idx = self.open_index(Settings(embed_backend="static"))
+            with self.assertRaises(ValueError):
+                idx.refresh()
+            attached = idx._store.conn.execute(
+                "SELECT count(*) FROM rg_vectors").fetchone()[0]
+            idx.close()
+        self.assertEqual(0, attached)
+
+
+class ChunkShapingSettingsReindex(Fixture):
+    """Settings that reshape stored chunks must reach unchanged files."""
+
+    BODY = "def long_function():\n" + "".join(
+        f"    step_{i} = compute_value_number_{i}()\n" for i in range(12))
+
+    def spans(self, settings: Settings) -> list[tuple[int, int]]:
+        idx = self.open_index(settings)
+        idx.refresh()
+        rows = idx._store.conn.execute(
+            "SELECT start_line, end_line FROM chunk ORDER BY start_line").fetchall()
+        idx.close()
+        return rows
+
+    def test_changing_max_chunk_lines_rechunks_an_unchanged_file(self) -> None:
+        self.write("a.py", self.BODY)
+        wide = self.spans(Settings(embed_backend="none", max_chunk_lines=40))
+        narrow = self.spans(Settings(embed_backend="none", max_chunk_lines=4))
+        self.assertNotEqual(wide, narrow)
+        fresh = Fixture.open_index(self, Settings(embed_backend="none",
+                                                  max_chunk_lines=4), home="fresh")
+        fresh.refresh()
+        expected = fresh._store.conn.execute(
+            "SELECT start_line, end_line FROM chunk ORDER BY start_line").fetchall()
+        fresh.close()
+        self.assertEqual(expected, narrow)
+
+    def test_every_setting_the_chunker_reads_is_in_the_fingerprint(self) -> None:
+        """Derived from the corpus source, so a new setting read while
+        building chunks cannot be left out."""
+        import ast
+
+        from repoglass.config.schema import CHUNKING_FIELDS
+
+        corpus = Path(__file__).resolve().parents[1] / "src" / "repoglass" / "corpus"
+        read = set()
+        for path in corpus.glob("*.py"):
+            for node in ast.walk(ast.parse(path.read_text())):
+                if (isinstance(node, ast.Attribute)
+                        and isinstance(node.value, ast.Name)
+                        and node.value.id == "settings"):
+                    read.add(node.attr)
+        # Walk-time inputs: every refresh re-walks, so a change reaches
+        # the file set without a fingerprint. Category lists have their
+        # own, categories_rev.
+        walk = {"hard_exclude", "gitignore", "max_file_bytes"}
+        categories = {"doc_languages", "config_languages", "data_languages",
+                      "test_markers", "index_excluded"}
+        identity = {"coverage"}
+        missing = read - walk - categories - identity - set(CHUNKING_FIELDS)
+        self.assertEqual(set(), missing)
 
 
 class F3_GitignoreChangePropagates(Fixture):

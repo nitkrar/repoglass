@@ -28,15 +28,15 @@ def exact(store: Store, name: str, *, lang: str | None = None) -> list[Symbol]:
 def keyword(
     store: Store, query: str, *, limit: int, mode: SearchMode, lang=None, include=None, exclude=None
 ) -> list[tuple[int, float]]:
-    """Tier 2: FTS5 MATCH ranked by bm25().
+    """Tier 2: BM25 over the keyword index, for any of the query's words.
 
-    Returns (symbol_id, raw_score). Raw bm25 is negative and ascending-best;
+    Returns (chunk_id, raw_score). Raw bm25 is negative and ascending-best;
     normalisation to [0,1] happens in fuse.py, not here.
     """
     terms = tokenize_query(query)
     if not terms:
         return []
-    return store.fts_search(" OR ".join(terms), limit=limit, mode=mode,
+    return store.fts_search(" ".join(terms), limit=limit, mode=mode,
                             lang=lang, include=include,
                             exclude=exclude)
 

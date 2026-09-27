@@ -6,6 +6,8 @@ import functools
 import re
 from pathlib import Path
 
+from semsift.rerank import Candidate as Scored, Multiply
+
 from .boosting import Candidate
 
 _TEST_FILE_RE = re.compile(
@@ -65,10 +67,12 @@ def _select_top(cands: list[Candidate], settings, *, limit: int,
     rather than dropped, since identical spans in different files are one
     answer to what the code does and several to where it lives.
     """
-    scored = [
-        (c.score * (path_penalty(c.path) if penalise_paths else 1.0), c)
-        for c in cands
-    ]
+    penalised = {c.symbol_id: c.score for c in cands}
+    if penalise_paths:
+        weighed = Multiply(lambda c: path_penalty(c.metadata["path"]), needs={"metadata"})
+        penalised = {c.id: c.score for c in weighed.rerank("", [
+            Scored(c.symbol_id, c.score, metadata={"path": c.path}) for c in cands])}
+    scored = [(penalised[c.symbol_id], c) for c in cands]
     scored.sort(key=lambda t: (-t[0], t[1].symbol_id))
 
     per_file: dict[str, int] = {}

@@ -1,4 +1,4 @@
-"""Retrieval tiers and fusion."""
+"""Tier merging and candidate depth."""
 
 from __future__ import annotations
 
@@ -10,69 +10,73 @@ from repoglass.config import Settings
 from repoglass.search import fuse
 
 
-class RankedListTests(unittest.TestCase):
-    def test_ranks_are_one_based_and_ordered(self) -> None:
-        rl = fuse.RankedList(tier="lexical", items=((7, -1.2), (9, -0.4)))
-        self.assertEqual({7: 1, 9: 2}, rl.ranks())
-
-
-class NormaliseTests(unittest.TestCase):
-    def test_maps_onto_zero_one_higher_better(self) -> None:
-        out = dict(fuse.normalise([(1, -5.0), (2, -1.0), (3, -3.0)]))
-        self.assertAlmostEqual(1.0, out[2])   # bm25 least-negative is best
-        self.assertAlmostEqual(0.0, out[1])
-        self.assertTrue(0.0 < out[3] < 1.0)
-
-    def test_single_item_is_top_scored(self) -> None:
-        self.assertEqual([(4, 1.0)], fuse.normalise([(4, -2.0)]))
-
-    def test_identical_scores_do_not_divide_by_zero(self) -> None:
-        out = fuse.normalise([(1, 2.0), (2, 2.0)])
-        self.assertEqual(2, len(out))
-        self.assertTrue(all(0.0 <= s <= 1.0 for _, s in out))
-
-    def test_empty_input(self) -> None:
-        self.assertEqual([], fuse.normalise([]))
-
-
-class RrfTests(unittest.TestCase):
-    def test_appearing_in_both_tiers_beats_appearing_in_one(self) -> None:
-        """The actual value of fusion: corroboration across retrievers.
-
-        Note RRF does NOT favour a consistent middle rank over a first
-        place. With k=60, rank 1 + rank 3 scores 1/61 + 1/63 = 0.032266,
-        just above rank 2 twice at 1/62 + 1/62 = 0.032258.
-        """
-        a = fuse.RankedList("lexical", ((1, 0.0), (2, 0.0)))
-        b = fuse.RankedList("vector", ((1, 0.0), (3, 0.0)))
-        merged = [sid for sid, _ in fuse.rrf([a, b], k=60)]
-        self.assertEqual(1, merged[0])
-
-    def test_a_lone_top_hit_can_outrank_a_consistent_runner_up(self) -> None:
-        a = fuse.RankedList("lexical", ((1, 0.0), (2, 0.0), (3, 0.0)))
-        b = fuse.RankedList("vector", ((3, 0.0), (2, 0.0), (1, 0.0)))
-        scores = dict(fuse.rrf([a, b], k=60))
-        self.assertGreater(scores[1], scores[2])
-        self.assertAlmostEqual(scores[1], scores[3])
-
-    def test_single_list_preserves_order(self) -> None:
-        a = fuse.RankedList("lexical", ((5, 0.0), (6, 0.0)))
-        self.assertEqual([5, 6], [sid for sid, _ in fuse.rrf([a], k=60)])
-
-
 class MergeTests(unittest.TestCase):
     def test_ranker_none_takes_first_non_empty_tier(self) -> None:
-        empty = fuse.RankedList("exact", ())
-        lex = fuse.RankedList("lexical", ((9, -1.0),))
-        vec = fuse.RankedList("vector", ((4, 0.9),))
+        empty = fuse.ranked("exact", ())
+        lex = fuse.ranked("lexical", ((9, -1.0),), lower_is_better=True)
+        vec = fuse.ranked("vector", ((4, 0.9),))
         out = fuse.merge([empty, lex, vec], Settings(ranker="none"))
         self.assertEqual([9], [sid for sid, _ in out])
 
     def test_scores_are_normalised_whatever_the_ranker(self) -> None:
-        lex = fuse.RankedList("lexical", ((9, -1.0), (8, -3.0)))
+        lex = fuse.ranked("lexical", ((9, -1.0), (8, -3.0)), lower_is_better=True)
         for ranker in ("none", "rrf"):
             out = fuse.merge([lex], Settings(ranker=ranker))
             self.assertTrue(all(0.0 <= s <= 1.0 for _, s in out), ranker)
+
+
+class RankerNoneTests(unittest.TestCase):
+    """With ranker='none' the first tier's own order is the answer."""
+
+    def test_the_best_bm25_match_comes_first(self) -> None:
+        from repoglass import Index
+        from repoglass.config import Paths
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            (root / "strong.py").write_text(
+                "def settle_ledger():\n"
+                "    # ledger ledger ledger: settle the ledger balance\n"
+                "    return ledger.settle_ledger_balance()\n")
+            (root / "weak.py").write_text(
+                "def unrelated_helper():\n"
+                "    # formats a report; mentions a ledger only once here\n"
+                "    return format_the_report_for_printing()\n")
+            idx = Index.open(root, Settings(embed_backend="none", ranker="none",
+                                            rerank=False),
+                             paths=Paths(root=root, home=Path(tmp) / "h"))
+            hits = idx.search("ledger", k=2, content="all")
+            idx.close()
+        self.assertEqual(["strong.py", "weak.py"], [h.path for h in hits])
+        lexical = [dict(h.tiers)["lexical"] for h in hits]
+        self.assertLess(lexical[0], lexical[1])
+
+    def test_equal_exact_matches_keep_path_order_after_a_refresh(self) -> None:
+        from repoglass import Index
+        from repoglass.config import Paths
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            for path in ("a.py", "b.py"):
+                (root / path).write_text(
+                    "def shared_name():\n"
+                    "    # long enough to be a retrievable chunk\n"
+                    f"    return {path!r}\n")
+            settings = Settings(embed_backend="none", ranker="none",
+                                rerank=False)
+            idx = Index.open(root, settings,
+                             paths=Paths(root=root, home=Path(tmp) / "h"))
+            idx.refresh()
+            (root / "a.py").write_text(
+                "def shared_name():\n"
+                "    # changed and long enough to be a retrievable chunk\n"
+                "    return 'changed'\n")
+            idx.refresh()
+            hits = idx.search("shared_name", k=2, content="all")
+            idx.close()
+        self.assertEqual(["a.py", "b.py"], [hit.path for hit in hits])
 
 
 class CandidateDepthTests(unittest.TestCase):

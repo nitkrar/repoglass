@@ -70,30 +70,6 @@ class WindowCoverageTests(unittest.TestCase):
 
 
 class WindowSizeTests(unittest.TestCase):
-    def test_windows_are_bounded_and_comparable(self) -> None:
-        """Window sizes stay within a narrow band."""
-        body = "\n\n".join(
-            f"def f{i}():\n" + "\n".join(f"    x{j} = {j}" for j in range(i))
-            for i in range(1, 30)
-        )
-        s = Settings(window_chars=400)
-        sizes = [len(c.text) for c in extract.window_chunks(pyfile(), body, s)]
-        self.assertTrue(sizes)
-        # No window should be wildly over target; a single indivisible
-        # node can exceed it, but not by an order of magnitude.
-        self.assertLess(max(sizes), 400 * 4)
-
-    def test_spans_do_not_overlap(self) -> None:
-        s = Settings(window_chars=150)
-        chunks = sorted(extract.window_chunks(pyfile(), SRC, s),
-                        key=lambda c: c.start_line)
-        for a, b in zip(chunks, chunks[1:]):
-            self.assertLessEqual(a.end_line, b.start_line + 1)
-
-    def test_an_empty_file_yields_nothing(self) -> None:
-        self.assertEqual([], extract.window_chunks(pyfile(), "   \n\n  ",
-                                                   Settings()))
-
     def test_line_fallback_covers_ungrammared_text(self) -> None:
         spans = extract._line_spans(b"a\n" * 200, 50)
         self.assertGreater(len(spans), 1)

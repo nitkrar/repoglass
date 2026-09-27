@@ -34,11 +34,28 @@ The indexed tree is read-only. Index data lives separately.
 similarity. `Settings.ranker` merges those tier outputs; `rerank` is a post-pass
 over the merged candidate pool rather than a fourth retriever.
 
+Encoders, the store behind the keyword and vector tiers, rank fusion, window
+chunking and the directory walk come from
+[semsift](https://github.com/nitkrar/semsift). Each chunk is a semsift item in
+the same SQLite file (`rg_*` tables), with the chunk's id and its file's
+category, language and path as filterable fields. repoglass keeps its own
+`file`, `symbol` and `chunk` tables for navigation, the exact tier and
+reranking, and maps its settings onto semsift in `embeddings.py`, `store.py`,
+`search/`, `corpus/windows.py` and `corpus/discovery.py`.
+
+When the model's outputs no longer match the stored vectors (semsift's canary
+check), search skips the vector tier and logs a warning; `rpg index --force`
+re-embeds every chunk.
+
 ## Refresh
 
 - Staleness is tracked by comparing `(mtime_ns, size)` from discovery with the
   stored `file` rows.
 - Deletions rely on `PRAGMA foreign_keys = ON` on every SQLite connection.
+- Everything else that shaped the stored rows is the index identity in `meta`
+  (D28). A change to any of it rebuilds the index.
+- A refresh embeds any chunk still without a vector, so an embedding failure
+  is retried without a file change.
 - Under `refresh_mode="auto"`, reads attempt a best-effort refresh. A never-built
   index blocks instead of returning an ambiguous empty result; a busy existing
   index serves stale data and records the skip.

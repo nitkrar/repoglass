@@ -7,8 +7,6 @@ repository. `.gitignore` is read as a file, not queried through the binary.
 from __future__ import annotations
 
 import logging
-import os
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
 
@@ -24,76 +22,40 @@ log = logging.getLogger(__name__)
 def walk(paths: Paths, settings: Settings) -> Iterator[SourceFile]:
     """Yield every indexable file under `paths.root`.
 
-    Ignore files are honoured per directory and inherit downward, as git
-    does -- see `_load_ignore_for_dir`.
-
-    Directories: `is_dir(follow_symlinks=False)`. Symlinked directories
-    are never descended -- this is what bounds the walk, since
-    `hard_exclude` matches names and cannot break a cycle. File symlinks
-    are followed and deduplicated by `os.path.realpath`, so a link and
-    its target index once.
-
-    `OSError` from any entry (broken symlink, permission denied) is
-    logged and skipped. One unreadable entry must not abort a walk, and
-    must never surface from a read method.
+    semsift's `discover` walks the tree and applies `.gitignore` (when
+    `settings.gitignore`) and `.repoglassignore` per directory, the
+    latter settling disagreements; `hard_exclude` prunes directories by
+    name. repoglass then drops what it cannot or should not index: files
+    over `max_file_bytes`, generated files, languages it does not detect,
+    and `index_excluded` content types.
     """
+    from semsift.files import discover
+
     root = paths.root
     pruned = set(settings.hard_exclude)
+    ignore_files = ((".gitignore",) if settings.gitignore else ()) + (IGNORE_FILE_NAME,)
 
-    stack: list[tuple[Path, tuple]] = [(root, ())]
-    seen_real: set[str] = set()
-    while stack:
-        directory, inherited = stack.pop()
-        spec = _load_ignore_for_dir(directory, settings)
-        if spec is not None:
-            inherited = (*inherited, _IgnoreSpec(base=directory, spec=spec))
-        try:
-            entries = list(os.scandir(directory))
-        except OSError as exc:
-            log.debug("skipping unreadable directory %s: %s", directory, exc)
+    def include(rel: str, is_dir: bool) -> bool:
+        if is_dir:
+            return rel.rsplit("/", 1)[-1] not in pruned
+        return is_indexable(rel)
+
+    for found in discover(root, ignore_files=ignore_files, include=include):
+        if found.size > settings.max_file_bytes:
+            log.debug("skipping %s: %d bytes", found.path, found.size)
             continue
-        for entry in entries:
-            try:
-                path = Path(entry.path)
-                if entry.is_dir(follow_symlinks=False):
-                    if entry.name not in pruned and not _is_ignored(
-                        root, path, inherited, is_dir=True
-                    ):
-                        stack.append((path, inherited))
-                    continue
-                rel = os.path.relpath(entry.path, root).replace(os.sep, "/")
-                if not is_indexable(rel):
-                    continue
-                if _is_ignored(root, path, inherited, is_dir=False):
-                    continue
-                real = os.path.realpath(entry.path)
-                if real in seen_real:
-                    continue
-                seen_real.add(real)
-                st = entry.stat(follow_symlinks=True)
-            except OSError as exc:
-                log.debug("skipping unreadable entry %s: %s", entry.path, exc)
-                continue
-            if st.st_size > settings.max_file_bytes:
-                log.debug("skipping %s: %d bytes", rel, st.st_size)
-                continue
-            # Last, because it is the only filter that opens the file.
-            if _is_generated(path, st.st_size):
-                log.debug("skipping %s: lines too long to be written", rel)
-                continue
-            lang = languages.detect(rel)
-            if lang is None:
-                continue
-            content_type = classify(lang, rel, settings)
-            if content_type in settings.index_excluded:
-                continue
-            yield SourceFile(
-                path=rel,
-                mtime_ns=st.st_mtime_ns,
-                size=st.st_size,
-                lang=lang,
-                content_type=content_type,
-            )
+        # Last, because it is the only filter that opens the file.
+        if _is_generated(root / found.path, found.size):
+            log.debug("skipping %s: lines too long to be written", found.path)
+            continue
+        lang = languages.detect(found.path)
+        if lang is None:
+            continue
+        content_type = classify(lang, found.path, settings)
+        if content_type in settings.index_excluded:
+            continue
+        yield SourceFile(path=found.path, mtime_ns=found.mtime_ns, size=found.size,
+                         lang=lang, content_type=content_type)
 
 
 #: A file whose typical line runs this long was generated, not
@@ -152,60 +114,3 @@ def is_indexable(path: str) -> bool:
     """
     lang = languages.detect(path)
     return lang is not None and lang not in NEVER_INDEX_LANGS
-
-
-@dataclass(frozen=True)
-class _IgnoreSpec:
-    """One ignore file's patterns, and the directory they are relative to."""
-
-    base: Path
-    spec: object
-
-
-def _load_ignore_for_dir(directory: Path, settings: Settings):
-    """Compile `.gitignore` + `.repoglassignore` for one directory.
-
-    Ignore files are per-directory in git, not per-repository: a
-    monorepo with `packages/foo/.gitignore` expects those patterns to
-    apply inside that package and nowhere else.
-
-    `.gitignore` lines come first so `.repoglassignore` settles any
-    disagreement within the same directory -- last match wins.
-    """
-    from pathspec import GitIgnoreSpec
-
-    lines: list[str] = []
-    if settings.gitignore:
-        lines += _read_lines(directory / ".gitignore")
-    lines += _read_lines(directory / IGNORE_FILE_NAME)
-    return GitIgnoreSpec.from_lines(lines) if lines else None
-
-
-def _is_ignored(rel_to: Path, path: Path, specs, is_dir: bool) -> bool:
-    """Whether any inherited spec excludes `path`.
-
-    Walk every pattern of every spec in order and keep the last
-    verdict, rather than asking each spec independently. That is what
-    lets a `!` pattern in a nearer ignore file re-admit a file an outer
-    `.gitignore` excluded.
-    """
-    ignored = False
-    for entry in specs:
-        try:
-            relative = path.relative_to(entry.base)
-        except ValueError:
-            continue
-        text = relative.as_posix() + ("/" if is_dir else "")
-        for pattern in entry.spec.patterns:
-            if pattern.include is None:
-                continue
-            if pattern.match_file(text) is not None:
-                ignored = pattern.include
-    return ignored
-
-
-def _read_lines(path: Path) -> list[str]:
-    try:
-        return path.read_text(encoding="utf-8", errors="ignore").splitlines()
-    except OSError:
-        return []

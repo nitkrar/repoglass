@@ -1,7 +1,7 @@
 """Chunk construction.
 
 `text` is what gets embedded and what FTS5 reads through the
-`chunk_lexical` view. `lexical()` renders the FTS5 form on demand.
+keyword text semsift indexes. `lexical()` renders the FTS5 form on demand.
 """
 
 from __future__ import annotations

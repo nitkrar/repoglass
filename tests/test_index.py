@@ -1,6 +1,6 @@
 """End-to-end through the public API.
 
-Uses FakeEmbedder throughout: no test may download a model.
+Uses FakeEncoder throughout: no test may download a model.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from unittest import mock
 from repoglass import Index
 from repoglass.config import Paths, Settings
 from repoglass.corpus import discovery
+from semsift.embed import FakeEncoder
 
 FIXTURE = Path(__file__).parent / "fixtures" / "python" / "sample.py"
 
@@ -266,17 +267,25 @@ class ColdRefreshCostTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name) / "repo"
         self.root.mkdir(parents=True)
-        (self.root / "a.py").write_text("def alpha():\n    return 1\n")
+        (self.root / "a.py").write_text(self.chunk("alpha"))
         self.home = Path(self.tmp.name) / "home"
-        self.settings = Settings(embed_backend="none")
-        Index.open(self.root, self.settings,
-                   paths=Paths(root=self.root, home=self.home)).refresh()
+        self.settings = Settings(embed_backend="static")
+        with mock.patch("repoglass.index.build_embedder",
+                        return_value=FakeEncoder()):
+            Index.open(self.root, self.settings,
+                       paths=Paths(root=self.root, home=self.home)).refresh()
+
+    @staticmethod
+    def chunk(name: str) -> str:
+        return (f"def {name}():\n    # long enough to be a retrievable chunk\n"
+                f"    return 'a value here to pass the minimum chunk size'\n")
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
     def test_a_noop_refresh_does_not_build_the_embedder(self) -> None:
-        with mock.patch("repoglass.index.build_embedder", return_value=None) as build:
+        with mock.patch("repoglass.index.build_embedder",
+                        return_value=FakeEncoder()) as build:
             index = Index.open(self.root, self.settings,
                                paths=Paths(root=self.root, home=self.home))
             report = index.refresh()
@@ -285,8 +294,9 @@ class ColdRefreshCostTests(unittest.TestCase):
         build.assert_not_called()
 
     def test_a_refresh_with_work_still_builds_it(self) -> None:
-        (self.root / "b.py").write_text("def beta():\n    return 2\n")
-        with mock.patch("repoglass.index.build_embedder", return_value=None) as build:
+        (self.root / "b.py").write_text(self.chunk("beta"))
+        with mock.patch("repoglass.index.build_embedder",
+                        return_value=FakeEncoder()) as build:
             index = Index.open(self.root, self.settings,
                                paths=Paths(root=self.root, home=self.home))
             self.assertEqual(1, index.refresh().added)
@@ -549,76 +559,6 @@ class CrashDuringIndexTests(unittest.TestCase):
         self.assertEqual(4, files)
         self.assertEqual(4, chunks)
         self.assertTrue(index.search("alpha3"), "the whole tree is searchable")
-
-
-class FtsRebuildRecoveryTests(unittest.TestCase):
-    """The FTS index has to record that it is behind.
-
-    Chunks are committed before the FTS rebuild runs. If the rebuild
-    never happens the rows are all present and correct, so the next
-    walk reports nothing added and nothing changed and the rebuild is
-    never reached again. Only the lexical tier is affected, which
-    makes it quieter than a missing chunk, not better: `COUNT(*)` on
-    an external-content table reads through to the view, so the
-    index looks full while matching nothing.
-    """
-
-    def setUp(self) -> None:
-        self.tmp = tempfile.TemporaryDirectory()
-        self.root = Path(self.tmp.name) / "repo"
-        self.root.mkdir(parents=True)
-        for i in range(3):
-            (self.root / f"m{i}.py").write_text(
-                f"def alpha{i}():\n"
-                f"    return 'a distinctive marker word zebrafish {i}'\n")
-        self.home = Path(self.tmp.name) / "home"
-        self.settings = Settings(embed_backend="none")
-
-    def tearDown(self) -> None:
-        self.tmp.cleanup()
-
-    def _index(self) -> Index:
-        return Index.open(self.root, self.settings,
-                          paths=Paths(root=self.root, home=self.home))
-
-    def _crash_before_rebuild(self) -> None:
-        from repoglass import store as store_mod
-
-        real = store_mod.Store.rebuild_fts
-
-        def boom(self):
-            raise RuntimeError("died before the rebuild")
-        store_mod.Store.rebuild_fts = boom
-        try:
-            with self.assertRaises(RuntimeError):
-                self._index().refresh()
-        finally:
-            store_mod.Store.rebuild_fts = real
-
-    def test_lexical_search_recovers_on_the_next_refresh(self) -> None:
-        self._crash_before_rebuild()
-        index = self._index()
-        index.refresh()
-        self.assertTrue(index.search("zebrafish"),
-                        "a word in the chunk body, so only the lexical"
-                        " tier can find it")
-
-    def test_a_completed_refresh_leaves_nothing_outstanding(self) -> None:
-        index = self._index()
-        index.refresh()
-        self.assertFalse(index._store.fts_dirty())
-
-    def test_the_rebuild_is_not_repeated_when_nothing_changed(self) -> None:
-        self._index().refresh()
-        calls = []
-        from repoglass import store as store_mod
-        real = store_mod.Store.rebuild_fts
-        store_mod.Store.rebuild_fts = lambda s: (calls.append(1), real(s))[1]
-        try:
-            self._index().refresh()
-        finally:
-            store_mod.Store.rebuild_fts = real
-        self.assertEqual([], calls)
 
 
 class SelfReferenceTests(unittest.TestCase):

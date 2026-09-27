@@ -7,20 +7,24 @@ argument indistinguishable from an explicit one.
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 import time
 from dataclasses import replace
 from pathlib import Path
 from typing import Sequence
 
-from .config import Paths, Settings, categories_rev
+from .config import Paths, Settings, categories_rev, chunking_rev
 from .config import load as load_settings
 from .corpus import discovery, extract, languages
+from . import embeddings
 from .embeddings import build as build_embedder
-from .embeddings import pack
 from .models import Hit, LanguageFilter, RefreshReport, SearchMode, Symbol
-from .search import fuse, lexical, rank, vector
+from .search import fuse, lexical, rank
+from semsift.store import StaleVectors
 from .store import Store, normalise_content
+
+log = logging.getLogger(__name__)
 
 
 class Index:
@@ -69,7 +73,7 @@ class Index:
 
     def _embed(self):
         if not self._embedder_built:
-            self._embedder = build_embedder(self._settings, self._paths)
+            self._embedder = build_embedder(self._settings)
             self._embedder_built = True
         return self._embedder
 
@@ -114,13 +118,10 @@ class Index:
                 with self._store.transaction():
                     self._store.upsert_files([file])
                     self._index_file(file, source)
-            self._embed_pending()
-        # Outside the `touched` branch: a run that wrote chunks and
-        # died before the rebuild leaves every row correct, so no
-        # later walk reports a change, and only the flag remembers
-        # that the lexical index is behind.
-        if self._store.fts_dirty():
-            self._store.rebuild_fts()
+        # Outside the `touched` branch: a run that wrote chunks and died
+        # before embedding leaves every row correct, so no later walk
+        # reports a change. Only the chunks without vectors remember.
+        self._embed_pending()
         self._store.mark_scanned()
 
         return RefreshReport(
@@ -134,15 +135,19 @@ class Index:
         from .store import Identity
 
         stored = self._store.identity()
+        configured = embeddings.space(self._settings, 0)
         # `dims` is the only thing wanted from the embedder, and
         # constructing one imports the whole model stack. The stored
-        # width already answers it whenever the embedder that wrote it
-        # is the one configured now -- or when there is no embedder at
-        # all, where there is nothing to construct and nothing to learn.
+        # width answers it only when the whole stored vector space is
+        # still configured. A different backend variant may have a
+        # different width and must be loaded before the old index is reset.
         no_embedder = self._settings.embed_backend == "none"
         settled = (stored is not None
-                   and stored.embed_model == self._settings.embed_model
-                   and stored.embed_backend == self._settings.embed_backend
+                   and stored.embed_model == configured.model
+                   and stored.embed_backend == configured.backend
+                   and stored.embed_variant == configured.variant
+                   and stored.embed_doc_prefix == configured.doc_prefix
+                   and stored.embed_pooling == configured.pooling
                    and stored.embed_dims > 0)
         if stored is not None and (no_embedder or settled):
             dims = stored.embed_dims
@@ -150,14 +155,19 @@ class Index:
             embedder = self._embed()
             dims = (embedder.dims if embedder
                     else (stored.embed_dims if stored else 0))
+        space = replace(configured, dims=dims)
         return Identity(
             schema_rev=stored.schema_rev if stored else "",
-            embed_model=self._settings.embed_model,
-            embed_backend=self._settings.embed_backend,
-            embed_dims=dims,
+            embed_model=space.model,
+            embed_backend=space.backend,
+            embed_dims=space.dims,
             coverage=self._settings.coverage,
             extractor_rev=languages.extractor_rev(),
             categories_rev=categories_rev(self._settings),
+            embed_variant=space.variant,
+            embed_doc_prefix=space.doc_prefix,
+            embed_pooling=space.pooling,
+            chunking_rev=chunking_rev(self._settings),
         )
 
     def _reindex_if_identity_changed(self) -> None:
@@ -178,16 +188,15 @@ class Index:
         self._store.upsert_chunks(file.path, result.chunks)
 
     def _embed_pending(self) -> None:
+        # Checked before building the embedder, which loads a model.
+        if self._settings.embed_backend == "none":
+            return
+        if not self._store.items.missing_vectors():
+            return
         embedder = self._embed()
         if embedder is None:
             return
-        rows = self._store.pending_vectors()
-        if not rows:
-            return
-        vectors = embedder.encode([t for _, t in rows])
-        self._store.set_vectors(
-            [(sid, pack(v)) for (sid, _), v in zip(rows, vectors)]
-        )
+        self._store.embed_missing(embedder)
         self._store.set_embed_dims(embedder.dims)
 
     def _maybe_refresh(self) -> None:
@@ -313,7 +322,7 @@ class Index:
                                                        exclude=exclude)
         ]
         if hits:
-            lists.append(fuse.RankedList("exact", tuple(hits)))
+            lists.append(fuse.ranked("exact", hits, preserve_order=True))
         # The lexical tier runs for prose queries too: BM25 wins enough
         # of them outright that skipping it costs more than the
         # dilution it causes.
@@ -321,18 +330,22 @@ class Index:
                              exclude=exclude,
                              limit=self._settings.candidate_depth, mode=mode)
         if kw:
-            lists.append(fuse.RankedList("lexical", tuple(kw)))
+            lists.append(fuse.ranked("lexical", kw, lower_is_better=True))
         embedder = self._embed()
         if embedder is not None:
-            # encode_query, not encode: bge and e5 want an instruction on
-            # the query side and nothing on the document side. Using the
-            # document path here costs recall and fails silently.
-            qv = embedder.encode_query([query])[0]
-            vec = vector.search(self._store, qv, lang=lang, include=include,
-                                exclude=exclude,
-                                limit=self._settings.candidate_depth, mode=mode)
-            if vec:
-                lists.append(fuse.RankedList("vector", tuple(vec)))
+            try:
+                vec = self._store.vector_search(
+                    embedder, query, lang=lang, include=include, exclude=exclude,
+                    limit=self._settings.candidate_depth, mode=mode)
+            except StaleVectors as exc:
+                # Keyword and exact tiers still answer; a forced refresh
+                # re-embeds every chunk.
+                log.warning("%s; run `rpg index --force`", exc)
+            else:
+                for warning in vec.warnings:
+                    log.warning(warning)
+                if vec.items:
+                    lists.append(vec)
         return lists
 
     @staticmethod
@@ -340,8 +353,8 @@ class Index:
         """chunk id -> the raw score each tier gave it."""
         by_id: dict[int, list[tuple[str, float]]] = {}
         for ranked in lists:
-            for sid, raw in ranked.items:
-                by_id.setdefault(sid, []).append((ranked.tier, raw))
+            for s in ranked.items:
+                by_id.setdefault(s.id, []).append((ranked.source, s.raw))
         return {k: tuple(v) for k, v in by_id.items()}
 
     @staticmethod

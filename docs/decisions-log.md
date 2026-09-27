@@ -17,9 +17,9 @@ gitignore syntax, with `.repoglassignore` taking the last match.
 **D21 — the default index lives outside the repository.** The indexed tree stays
 read-only; `data_dir` is the opt-in override.
 
-**D22 — default lexical text is derived, not stored per chunk.** `chunk_fts`
-reads the `chunk_lexical` view. `chunk.lexical_override` is written only when
-the configured lexical rendering differs from the default path-plus-body form.
+**D22 — keyword text is stored once, on the semsift item.** Each chunk's item
+carries the path words and body as its keyword text, or `chunk.lexical_override`
+when the configured lexical rendering differs from that default form.
 
 **D25 — there is no derived confidence field.** `Hit.tiers` exposes which
 retrievers matched; callers should not treat a rescaled score as a probability.
@@ -29,6 +29,15 @@ are independent, so one matching a node does not stop another from matching it
 too; `extract` drops references at any byte range captured as `@ignore`.
 `(#is-not? local)` reads as the same thing but needs the scope tracking a
 `locals.scm` supplies, and none is loaded here, so it never fires.
+
+**D28 — index identity covers every input that shapes stored rows.**
+Chunks are rebuilt only for files whose `(mtime_ns, size)` changed, so an
+input missing from `Identity` reaches new files and never the rest. It
+holds the vector space (model, backend, variant, dims, document prefix,
+pooling), `schema_rev`, `coverage`, `extractor_rev`, `categories_rev` and
+`chunking_rev`, a
+fingerprint of `CHUNKING_FIELDS`; a test derives the settings the corpus
+layer reads and fails on any not covered.
 
 **D12 — raw source and query-shape weighting are one change, not two.**
 Raw text alone is *worse* than the distillation it replaced. The gain is

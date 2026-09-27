@@ -137,8 +137,11 @@ class CategoriesAreStoredAndReclassified(CategoryFixture):
         """
         idx = self.index()
         self.assertIn("docs/guide.md", self.paths_for(idx, "docs"))
-        idx._store.conn.execute(
-            "UPDATE file SET content_type='code' WHERE path='docs/guide.md'")
+        # Stored twice, written together: on the file for the exact tier,
+        # and on its semsift items for the keyword and vector tiers.
+        for table in ("file", "rg_items"):
+            idx._store.conn.execute(
+                f"UPDATE {table} SET content_type='code' WHERE path='docs/guide.md'")
         idx._store.conn.commit()
         self.assertNotIn("docs/guide.md", self.paths_for(idx, "docs"))
         self.assertIn("docs/guide.md", self.paths_for(idx, "code"))
