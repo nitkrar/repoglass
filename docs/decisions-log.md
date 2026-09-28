@@ -17,9 +17,10 @@ gitignore syntax, with `.repoglassignore` taking the last match.
 **D21 — the default index lives outside the repository.** The indexed tree stays
 read-only; `data_dir` is the opt-in override.
 
-**D22 — keyword text is stored once, on the semsift item.** Each chunk's item
-carries the path words and body as its keyword text, or `chunk.lexical_override`
-when the configured lexical rendering differs from that default form.
+**D22 — chunk text is stored once, on the semsift item.** The `chunk` row holds
+no text. The item's keyword text is derived by semsift from the file's path
+words (`keywords`) and the chunk text; only a lexical rendering the settings
+reshape further is stored, as the item's `keyword_text`.
 
 **D25 — there is no derived confidence field.** `Hit.tiers` exposes which
 retrievers matched; callers should not treat a rescaled score as a probability.

@@ -560,6 +560,25 @@ class CrashDuringIndexTests(unittest.TestCase):
         self.assertEqual(4, chunks)
         self.assertTrue(index.search("alpha3"), "the whole tree is searchable")
 
+    def test_a_run_that_dies_before_the_keyword_sync_is_finished_next_time(self) -> None:
+        from semsift.store import Store as Items
+
+        real = Items.sync_keywords
+
+        def dies(self):
+            raise RuntimeError("killed")
+
+        Items.sync_keywords = dies
+        try:
+            with self.assertRaises(RuntimeError):
+                self._index().refresh()
+        finally:
+            Items.sync_keywords = real
+
+        index = self._index()
+        index.refresh()
+        self.assertTrue(index.search("alpha3"), "the whole tree is searchable")
+
 
 class SelfReferenceTests(unittest.TestCase):
     """A definition's own name is not a use of it.

@@ -101,6 +101,7 @@ class FtsTests(StoreTestCase):
             _chunk("unlock", 'raise ValueError("vault is already unlocked")'),
             _chunk("other", "completely unrelated payment invoice text"),
         ])
+        self.store.sync_keywords()
 
     def test_finds_a_string_literal(self) -> None:
         """The reason FTS5 indexes raw source rather than distilled text."""
@@ -295,6 +296,7 @@ class ItemSyncTests(StoreTestCase):
         self.store.upsert_chunks("a.py", [_chunk("alpha", "alpha refund ledger text")])
 
     def found(self) -> list[int]:
+        self.store.sync_keywords()
         return [i for i, _ in self.store.fts_search("refund", limit=10, mode="all")]
 
     def test_rewriting_a_files_chunks_replaces_its_items(self) -> None:

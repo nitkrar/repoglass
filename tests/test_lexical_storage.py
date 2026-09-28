@@ -1,4 +1,4 @@
-"""Default lexical text is derived, not stored per chunk."""
+"""Chunk text is stored once; the lexical text is derived from it."""
 
 from __future__ import annotations
 
@@ -35,6 +35,20 @@ class LexicalStorageTestCase(unittest.TestCase):
         return idx
 
 
+def assert_fts_reads_rendering(case: unittest.TestCase, idx: Index,
+                               settings: Settings) -> None:
+    """For every chunk, the text FTS5 indexes is `extract.lexical`'s."""
+    conn = idx._store.conn
+    rows = conn.execute(
+        "SELECT c.id, f.path, k.keyword_text FROM chunk c"
+        " JOIN file f ON f.id = c.file_id JOIN rg_keyword k ON k.id = c.id").fetchall()
+    case.assertTrue(rows)
+    texts = idx._store.items.fetch([cid for cid, _, _ in rows], {"text"})
+    for cid, path, indexed in rows:
+        case.assertEqual(
+            extract.lexical(path=path, body=texts[cid].text, settings=settings), indexed)
+
+
 class DerivedByDefaultTests(LexicalStorageTestCase):
     def setUp(self) -> None:
         super().setUp()
@@ -52,11 +66,27 @@ class DerivedByDefaultTests(LexicalStorageTestCase):
         ).fetchone()[0]
         self.assertEqual("payments refund Engine py", got)
 
-    def test_nothing_is_stored_per_chunk(self) -> None:
-        n = self.idx._store.conn.execute(
-            "SELECT count(*) FROM chunk WHERE lexical_override IS NOT NULL"
-        ).fetchone()[0]
-        self.assertEqual(0, n)
+    def test_what_fts_reads_is_the_rendered_lexical_text(self) -> None:
+        assert_fts_reads_rendering(self, self.idx, Settings(embed_backend="none"))
+
+    def test_chunk_text_is_stored_once(self) -> None:
+        import random
+
+        rng = random.Random(0)
+        words = [f"w{i}" for i in range(200)]
+        lines = [" ".join(rng.choice(words) for _ in range(12)) for _ in range(8000)]
+        (self.root / "notes.md").write_text("\n".join(lines) + "\n")
+        self.idx.refresh()
+        self.idx.close()
+        conn = sqlite3.connect(self.db)
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        conn.execute("VACUUM")
+        size = (conn.execute("PRAGMA page_count").fetchone()[0]
+                * conn.execute("PRAGMA page_size").fetchone()[0])
+        conn.close()
+        text = sum(len(line) + 1 for line in lines)
+        # One copy plus the inverted index; a second copy would pass 2x.
+        self.assertLess(size, 2 * text)
 
     def test_a_plain_connection_can_read_the_index(self) -> None:
         """No registered function, no import of this package."""
@@ -81,23 +111,9 @@ class DerivedByDefaultTests(LexicalStorageTestCase):
 class NonDerivableRenderingTests(LexicalStorageTestCase):
     """Settings that change lexical text store an override per chunk."""
 
-    def test_an_enriched_rendering_is_stored(self) -> None:
-        idx = self.open(Settings(embed_backend="none", lexical_enrich=True))
-        stored = idx._store.conn.execute(
-            "SELECT lexical_override FROM chunk WHERE lexical_override IS NOT NULL"
-        ).fetchall()
-        self.assertTrue(stored)
-
-    def test_what_is_stored_is_what_the_renderer_produces(self) -> None:
+    def test_what_fts_reads_is_the_enriched_rendering(self) -> None:
         s = Settings(embed_backend="none", lexical_enrich=True)
-        idx = self.open(s)
-        path, text, override = idx._store.conn.execute(
-            "SELECT f.path, c.text, c.lexical_override FROM chunk c"
-            " JOIN file f ON f.id = c.file_id"
-            " WHERE c.lexical_override IS NOT NULL LIMIT 1"
-        ).fetchone()
-        self.assertEqual(extract.lexical(path=path, body=text, settings=s),
-                         override)
+        assert_fts_reads_rendering(self, self.open(s), s)
 
     def test_it_still_reads_without_a_registered_function(self) -> None:
         idx = self.open(Settings(embed_backend="none", lexical_enrich=True))

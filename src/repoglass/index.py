@@ -119,8 +119,10 @@ class Index:
                     self._store.upsert_files([file])
                     self._index_file(file, source)
         # Outside the `touched` branch: a run that wrote chunks and died
-        # before embedding leaves every row correct, so no later walk
-        # reports a change. Only the chunks without vectors remember.
+        # before the keyword sync or embedding leaves every row correct,
+        # so no later walk reports a change. Only semsift's stale mark
+        # and the chunks without vectors remember.
+        self._store.sync_keywords()
         self._embed_pending()
         self._store.mark_scanned()
 

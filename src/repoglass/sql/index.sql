@@ -66,15 +66,12 @@ CREATE TABLE chunk (
   symbol_id    INTEGER          REFERENCES symbol(id) ON DELETE CASCADE,
   start_line   INTEGER NOT NULL,
   end_line     INTEGER NOT NULL,   -- capped span, may be shorter than the symbol's
-  text         TEXT NOT NULL,
-  content_hash TEXT NOT NULL,
-  -- Normally NULL: the keyword text is the path words and the span.
-  -- Settings that reshape it further -- identifier splitting, semble's
-  -- enriched header -- are stored here, and only those.
-  lexical_override TEXT
+  content_hash TEXT NOT NULL
 );
 CREATE INDEX chunk_file   ON chunk(file_id);
 CREATE UNIQUE INDEX chunk_symbol ON chunk(symbol_id) WHERE symbol_id IS NOT NULL;
 
--- Vectors and the keyword index live in semsift's `rg_*` tables in this
--- database, one item per chunk with the chunk's id.
+-- The chunk's text, vector and keyword index live in semsift's `rg_*`
+-- tables in this database, one item per chunk with the chunk's id. The
+-- keyword text is derived there from the file's path words and the text;
+-- only a rendering the settings reshape further is stored.

@@ -39,10 +39,9 @@ def embed_text(*, path: str, lang: str, node_kind: str,
 
 
 def lexical_override(*, path: str, body: str, settings: Settings) -> str | None:
-    """The FTS text to store, or None when the view can derive it.
+    """The FTS text to store, or None when semsift can derive it.
 
-    The `chunk_lexical` view falls back to `file.path_words` followed by
-    the chunk's text. Anything the settings do beyond that -- identifier
+    semsift derives the file's path words followed by the chunk's text. Anything the settings do beyond that -- identifier
     splitting, stem/directory enrichment, a cap -- has to be stored, so
     what decides is a comparison against that fallback: a new setting
     cannot quietly reshape the FTS text without being written down.

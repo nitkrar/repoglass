@@ -15,7 +15,7 @@ dependencies = [
     "tree-sitter>=0.25",            # Query/QueryCursor; Language.query removed in the same release
     "tree-sitter-language-pack>=1.19",
     "grep-ast>=0.9",
-    "semsift>=0.0.4",               # encoders, fusion, vector search, chunking, file discovery
+    "semsift>=0.0.5",               # encoders, fusion, vector search, chunking, file discovery
 ]
 
 [project.urls]
@@ -30,8 +30,8 @@ rpg = "repoglass.cli:main"
 config = ["tomlkit>=0.13"]
 # embed_backend="onnx" and embed_providers="webgpu": semsift's encoders,
 # so semsift's extras decide what they need.
-onnx = ["semsift[onnx]>=0.0.4"]
-webgpu = ["semsift[webgpu]>=0.0.4"]
+onnx = ["semsift[onnx]>=0.0.5"]
+webgpu = ["semsift[webgpu]>=0.0.5"]
 
 [tool.setuptools.dynamic]
 version = { attr = "repoglass.__version__" }

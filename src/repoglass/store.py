@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Iterable, Sequence
 
 
-from semsift.store import Field as ItemField, Item, Store as Items
+from semsift.store import LAYOUT as ITEM_LAYOUT, Field as ItemField, Item, Store as Items
 from semsift.store import filters as sf
 
 from .config import Settings, categories_rev
@@ -44,7 +44,7 @@ SCHEMA = schema_sql()
 
 
 def schema_rev() -> str:
-    """Fingerprint of the DDL.
+    """Fingerprint of the DDL, semsift's table layout included.
 
     Not a release version and not a migration chain -- there are no
     migrations. It answers one question at open time: do the tables on
@@ -57,7 +57,8 @@ def schema_rev() -> str:
     """
     import hashlib
 
-    return hashlib.blake2b(SCHEMA.encode(), digest_size=8).hexdigest()
+    ddl = f"{SCHEMA}\n-- semsift layout {ITEM_LAYOUT}"
+    return hashlib.blake2b(ddl.encode(), digest_size=8).hexdigest()
 
 
 def connect(db_path: Path) -> sqlite3.Connection:
@@ -337,6 +338,7 @@ class Store:
         }
         self.conn.execute("DELETE FROM chunk WHERE file_id=?", (fid,))
         rows = []
+        kept: list[Chunk] = []
         claimed: set[int] = set()
         for c in chunks:
             sid = ids.get((c.name, c.start_line)) if c.name else None
@@ -350,11 +352,11 @@ class Store:
                 if sid in claimed:
                     continue
                 claimed.add(sid)
-            rows.append((fid, sid, c.start_line, c.end_line, c.text,
-                         c.content_hash, c.lexical_override))
+            rows.append((fid, sid, c.start_line, c.end_line, c.content_hash))
+            kept.append(c)
         self.conn.executemany(
             "INSERT INTO chunk (file_id, symbol_id, start_line, end_line,"
-            " text, content_hash, lexical_override) VALUES (?,?,?,?,?,?,?)",
+            " content_hash) VALUES (?,?,?,?,?)",
             rows,
         )
         # The file's old items carry ids of chunks just deleted; its path
@@ -362,17 +364,29 @@ class Store:
         stale = self.items.select_ids(sf.eq("path", path))
         if stale:
             self.items.remove(stale)
+        words, content_type, lang = self.conn.execute(
+            "SELECT path_words, content_type, lang FROM file WHERE id = ?", (fid,)).fetchone()
+        metadata = {"content_type": content_type, "lang": lang, "path": path}
+        # AUTOINCREMENT issues ids in insertion order, so they pair with
+        # `kept` in order. The text lives only in the item.
+        ids = [r[0] for r in self.conn.execute(
+            "SELECT id FROM chunk WHERE file_id = ? ORDER BY id", (fid,))]
         items = [
-            Item(cid, text, {"content_type": content_type, "lang": lang, "path": path},
-                 keyword_text=override if override is not None else f"{words}\n{text}")
-            for cid, text, override, words, content_type, lang in self.conn.execute(
-                "SELECT c.id, c.text, c.lexical_override, f.path_words,"
-                " f.content_type, f.lang FROM chunk c JOIN file f ON f.id = c.file_id"
-                " WHERE c.file_id = ? ORDER BY c.id", (fid,))
+            Item(cid, c.text, metadata, keyword_text=c.lexical_override,
+                 keywords=words if c.lexical_override is None else None)
+            for cid, c in zip(ids, kept, strict=True)
         ]
+        # One rebuild at the end of the refresh costs less than keeping
+        # the keyword index current through a commit per file.
+        self.items.defer_keywords()
         if items:
             self.items.upsert(items)
         self._commit()
+
+    def sync_keywords(self) -> None:
+        """Bring the keyword index up to date after deferred chunk writes."""
+        with self.transaction():
+            self.items.sync_keywords()
 
     def reset_content(self) -> None:
         """Drop every indexed row, keeping meta. Used when identity changes."""
@@ -654,11 +668,12 @@ class Store:
         if not ids:
             return {}
         marks = ",".join("?" for _ in ids)
+        texts = self._texts(ids)
         return {
-            cid: (path, a, b, name or "", text, sig)
-            for cid, path, a, b, name, text, sig in self.conn.execute(
+            cid: (path, a, b, name or "", texts[cid], sig)
+            for cid, path, a, b, name, sig in self.conn.execute(
                 f"SELECT c.id, f.path, c.start_line, c.end_line, s.name,"
-                f"       c.text, s.signature"
+                f"       s.signature"
                 f"  FROM chunk c"
                 f"  JOIN file f ON f.id = c.file_id"
                 f"  LEFT JOIN symbol s ON s.id = c.symbol_id"
@@ -670,14 +685,18 @@ class Store:
         if not ids:
             return {}
         marks = ",".join("?" for _ in ids)
+        texts = self._texts(ids)
         return {
-            sid: (path, text)
-            for sid, path, text in self.conn.execute(
-                f"SELECT c.id, f.path, c.text FROM chunk c"
+            sid: (path, texts[sid])
+            for sid, path in self.conn.execute(
+                f"SELECT c.id, f.path FROM chunk c"
                 f" JOIN file f ON f.id = c.file_id"
                 f" WHERE c.id IN ({marks})", tuple(ids)
             )
         }
+
+    def _texts(self, ids: Sequence[int]) -> dict[int, str]:
+        return {i: r.text for i, r in self.items.fetch(ids, {"text"}).items()}
 
     def chunk_paths(self, ids: Sequence[int]) -> dict[int, str]:
         if not ids:
@@ -706,11 +725,13 @@ class Store:
             return []
         where = " OR ".join("lower(f.path) LIKE ?" for _ in stems)
         args = tuple(f"%{s}%" for s in stems)
-        sql = (f"SELECT c.id, f.path, c.text FROM chunk c"
+        sql = (f"SELECT c.id, f.path FROM chunk c"
                f" JOIN file f ON f.id = c.file_id"
                f" WHERE ({where})" + self._mode_clause(mode)
                + f" LIMIT {int(limit)}")
-        return list(self.conn.execute(sql, args))
+        rows = self.conn.execute(sql, args).fetchall()
+        texts = self._texts([cid for cid, _ in rows])
+        return [(cid, path, texts[cid]) for cid, path in rows]
 
     def chunk_span(self, chunk_id: int) -> tuple[str, int, int] | None:
         """The CHUNK's span, not the symbol's.

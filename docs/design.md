@@ -38,9 +38,9 @@ Encoders, the store behind the keyword and vector tiers, rank fusion, window
 chunking and the directory walk come from
 [semsift](https://github.com/nitkrar/semsift). Each chunk is a semsift item in
 the same SQLite file (`rg_*` tables), with the chunk's id and its file's
-category, language and path as filterable fields. repoglass keeps its own
-`file`, `symbol` and `chunk` tables for navigation, the exact tier and
-reranking, and maps its settings onto semsift in `embeddings.py`, `store.py`,
+category, language and path as filterable fields; the chunk's text lives only
+in its item. repoglass keeps its own `file`, `symbol` and `chunk` tables for
+navigation, the exact tier and reranking, and maps its settings onto semsift in `embeddings.py`, `store.py`,
 `search/`, `corpus/windows.py` and `corpus/discovery.py`.
 
 When the model's outputs no longer match the stored vectors (semsift's canary
