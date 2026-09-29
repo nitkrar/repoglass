@@ -38,6 +38,29 @@ def _read(path: Path | None) -> dict:
     return _flatten(tomllib.loads(path.read_text()))
 
 
+_TRUE = frozenset({"1", "true", "yes", "on"})
+_FALSE = frozenset({"0", "false", "no", "off", ""})
+
+
+def _from_env(name: str, kind: str, raw: str):
+    """An environment value as the setting's type. Lists are comma-separated."""
+    text = raw.strip()
+    try:
+        if kind == "bool":
+            if text.lower() in _TRUE | _FALSE:
+                return text.lower() in _TRUE
+            raise ValueError
+        if kind == "int":
+            return int(text)
+        if kind == "float":
+            return float(text)
+    except ValueError:
+        raise ValueError(f"{ENV_PREFIX}{name.upper()} expects {kind}; got {raw!r}") from None
+    if kind.startswith("tuple"):
+        return tuple(part.strip() for part in raw.split(",") if part.strip())
+    return raw
+
+
 def load(
     *,
     user_config: Path | None = None,
@@ -66,10 +89,10 @@ def load(
             f" or the user-level config."
         )
     merged.update(from_repo)
-    for name in known:
+    for name, field in known.items():
         env = os.environ.get(f"{ENV_PREFIX}{name.upper()}")
         if env is not None:
-            merged[name] = env
+            merged[name] = _from_env(name, str(field.type), env)
     merged.update(overrides or {})
 
     unknown = sorted(set(merged) - set(known))

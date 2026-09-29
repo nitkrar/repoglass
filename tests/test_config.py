@@ -250,5 +250,43 @@ class IndexLocationTests(unittest.TestCase):
                 os.chmod(root, 0o755)
 
 
+class EnvironmentTypeTests(unittest.TestCase):
+    """`REPOGLASS_<NAME>` values take the setting's type, not a string."""
+
+    def load_with(self, **env: str) -> Settings:
+        from unittest import mock
+
+        environ = {f"REPOGLASS_{k.upper()}": v for k, v in env.items()}
+        with mock.patch.dict(os.environ, environ, clear=True):
+            return load()
+
+    def test_false_turns_a_switch_off(self) -> None:
+        for raw in ("false", "False", "0", "no", "off"):
+            with self.subTest(raw=raw):
+                self.assertIs(False, self.load_with(rerank=raw).rerank)
+        for raw in ("true", "1", "yes", "on"):
+            with self.subTest(raw=raw):
+                self.assertIs(True, self.load_with(distill_docs=raw).distill_docs)
+
+    def test_numbers_are_numbers(self) -> None:
+        s = self.load_with(alpha_prose="0.25", candidate_depth="12")
+        self.assertEqual(0.25, s.alpha_prose)
+        self.assertEqual(12, s.candidate_depth)
+        # Used in arithmetic, where a string would raise.
+        self.assertEqual(0.75, 1.0 - s.alpha_prose)
+
+    def test_lists_are_comma_separated(self) -> None:
+        self.assertEqual(("test", "spec_"), self.load_with(test_markers="test, spec_").test_markers)
+
+    def test_an_empty_prefix_is_kept(self) -> None:
+        self.assertEqual("", self.load_with(embed_query_prefix="").embed_query_prefix)
+
+    def test_an_unparseable_value_names_the_variable(self) -> None:
+        for name, raw in (("rerank", "maybe"), ("candidate_depth", "ten"), ("alpha_prose", "half")):
+            with self.subTest(name=name):
+                with self.assertRaisesRegex(ValueError, f"REPOGLASS_{name.upper()}"):
+                    self.load_with(**{name: raw})
+
+
 if __name__ == "__main__":
     unittest.main()
