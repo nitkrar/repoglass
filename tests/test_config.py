@@ -60,23 +60,23 @@ class SettingsLoadTests(unittest.TestCase):
 
     def test_repo_config_overrides_defaults(self) -> None:
         cfg = self.dir / "repoglass.toml"
-        cfg.write_text('ranker = "ppr"\ncandidate_depth = 42\n')
+        cfg.write_text('ranker = "none"\ncandidate_depth = 42\n')
         s = load(repo_config=cfg)
-        self.assertEqual("ppr", s.ranker)
+        self.assertEqual("none", s.ranker)
         self.assertEqual(42, s.candidate_depth)
 
     def test_repo_config_beats_user_config(self) -> None:
         user = self.dir / "user.toml"
         repo = self.dir / "repo.toml"
-        user.write_text('ranker = "none"\n')
-        repo.write_text('ranker = "ppr"\n')
-        self.assertEqual("ppr", load(user_config=user, repo_config=repo).ranker)
+        user.write_text('ranker = "rrf"\n')
+        repo.write_text('ranker = "none"\n')
+        self.assertEqual("none", load(user_config=user, repo_config=repo).ranker)
 
     def test_overrides_beat_files(self) -> None:
         repo = self.dir / "repo.toml"
-        repo.write_text('ranker = "ppr"\n')
-        s = load(repo_config=repo, overrides={"ranker": "none"})
-        self.assertEqual("none", s.ranker)
+        repo.write_text('ranker = "none"\n')
+        s = load(repo_config=repo, overrides={"ranker": "rrf"})
+        self.assertEqual("rrf", s.ranker)
 
     def test_lists_survive_as_tuples(self) -> None:
         cfg = self.dir / "c.toml"
@@ -92,8 +92,8 @@ class SettingsLoadTests(unittest.TestCase):
 
     def test_nested_tables_are_flattened(self) -> None:
         cfg = self.dir / "c.toml"
-        cfg.write_text('[retrieval]\nranker = "ppr"\n')
-        self.assertEqual("ppr", load(repo_config=cfg).ranker)
+        cfg.write_text('[retrieval]\nranker = "none"\n')
+        self.assertEqual("none", load(repo_config=cfg).ranker)
 
 
 
@@ -248,6 +248,28 @@ class IndexLocationTests(unittest.TestCase):
                 self.assertTrue(idx.definitions("alpha"))
             finally:
                 os.chmod(root, 0o755)
+
+
+class ChoiceTests(unittest.TestCase):
+    """A setting with a fixed set of values refuses any other, rather than
+    running with a value no code path handles."""
+
+    def test_an_unknown_choice_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            for body in ('lexical_mode = "contentless"\n', 'ranker = "ppr"\n',
+                         'coverage = "everything"\n'):
+                with self.subTest(body=body):
+                    cfg = Path(tmp) / "c.toml"
+                    cfg.write_text(body)
+                    with self.assertRaisesRegex(ValueError, "expected"):
+                        load(repo_config=cfg)
+
+    def test_every_allowed_choice_loads(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = Path(tmp) / "c.toml"
+            cfg.write_text('lexical_mode = "capped"\nranker = "none"\ncoverage = "definition"\n')
+            s = load(repo_config=cfg)
+        self.assertEqual(("capped", "none", "definition"), (s.lexical_mode, s.ranker, s.coverage))
 
 
 class EnvironmentTypeTests(unittest.TestCase):

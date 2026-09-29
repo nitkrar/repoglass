@@ -148,7 +148,7 @@ class Settings:
     #: Target -- not a cap -- for a window, in bytes. An indivisible node
     #: larger than this is emitted whole.
     window_chars: int = 750
-    lexical_mode: Literal["full", "capped", "contentless"] = "full"
+    lexical_mode: Literal["full", "capped"] = "full"
     lexical_cap_chars: int = 2_000      # lexical_mode="capped" only
     #: Build the FTS input as span + stem + stem + dirs instead of
     #: humanised-path + span. Changing it forces a reindex.

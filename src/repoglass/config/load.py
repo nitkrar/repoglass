@@ -112,4 +112,20 @@ def load(
         elif isinstance(value, str) and "int" in str(target):
             value = int(value)
         coerced[name] = value
+    _check_choices(coerced)
     return Settings(**coerced)
+
+
+def _check_choices(values: dict) -> None:
+    """Refuse a value outside a setting's declared choices.
+
+    No code path handles such a value, so it would otherwise run as
+    whichever branch happens to be the fallback.
+    """
+    from typing import Literal, get_args, get_origin, get_type_hints
+
+    hints = get_type_hints(Settings)
+    for name, value in values.items():
+        if get_origin(hints[name]) is Literal and value not in get_args(hints[name]):
+            allowed = ", ".join(repr(a) for a in get_args(hints[name]))
+            raise ValueError(f"unknown {name} {value!r}; expected {allowed}")
