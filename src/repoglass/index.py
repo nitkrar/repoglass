@@ -204,7 +204,8 @@ class Index:
     def _maybe_refresh(self) -> None:
         """Best-effort refresh before a read, under refresh_mode='auto'.
 
-        On lock contention, records the skip and serves existing data.
+        On lock contention, serves existing data. Nothing records the
+        skip: a write would wait on the same lock.
 
         Exception: an index that has never completed a build blocks on the
         writer instead of returning [], since an empty result would be
@@ -222,7 +223,6 @@ class Index:
         except sqlite3.OperationalError:
             if never_built:
                 raise
-            self._store.mark_skipped()
 
     def definitions(self, name: str, *, lang: LanguageFilter = None) -> list[Symbol]:
         self._maybe_refresh()

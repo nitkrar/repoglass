@@ -15,8 +15,7 @@ CREATE TABLE meta (
   extractor_rev  TEXT    NOT NULL,
   categories_rev TEXT    NOT NULL DEFAULT '',
   chunking_rev   TEXT    NOT NULL DEFAULT '',
-  last_scan_at   REAL    NOT NULL,
-  last_skip_at   REAL
+  last_scan_at   REAL    NOT NULL
 );
 
 CREATE TABLE file (

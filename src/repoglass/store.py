@@ -233,11 +233,6 @@ class Store:
         self.conn.execute("UPDATE meta SET last_scan_at=? WHERE id=1", (time.time(),))
         self._commit()
 
-    def mark_skipped(self) -> None:
-        """A refresh was wanted but the write lock was held."""
-        self.conn.execute("UPDATE meta SET last_skip_at=? WHERE id=1", (time.time(),))
-        self._commit()
-
     def upsert_files(self, files: Iterable[SourceFile]) -> None:
         # `path_words` is computed here rather than taken from the
         # caller: it must exist for every row the FTS view reads, and a

@@ -75,5 +75,32 @@ class LifecycleTests(unittest.TestCase):
             conn.execute("SELECT 1")
 
 
+class HeldLockTests(unittest.TestCase):
+    """A read whose refresh meets another writer's lock serves the index
+    it has, rather than failing."""
+
+    def test_a_built_index_answers_while_another_process_writes(self) -> None:
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            root.mkdir()
+            shutil.copy(FIXTURE, root / "sample.py")
+            paths = Paths(root=root, home=Path(tmp) / "home")
+            settings = Settings(embed_backend="none", rescan_after_seconds=0)
+            with Index.open(root, settings, paths=paths) as index:
+                index.refresh()
+                writer = sqlite3.connect(paths.db, isolation_level=None)
+                writer.execute("BEGIN IMMEDIATE")
+                try:
+                    locked = sqlite3.OperationalError("database is locked")
+                    with mock.patch.object(Index, "refresh", side_effect=locked):
+                        found = index.definitions("helper")
+                finally:
+                    writer.execute("ROLLBACK")
+                    writer.close()
+            self.assertEqual(["helper"], [s.name for s in found])
+
+
 if __name__ == "__main__":
     unittest.main()
