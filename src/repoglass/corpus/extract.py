@@ -106,7 +106,13 @@ def extract(file: SourceFile, source: str, settings: Settings) -> Extraction:
     captures: dict = {}
     if query is not None:
         tree = get_parser(file.lang).parse(source.encode())
-        captures = QueryCursor(query).captures(tree.root_node)
+        # py-tree-sitter orders captures by memory layout, which varies
+        # between processes. Fixed order: capture names sorted, nodes by
+        # position, so every build of a file yields the same rows.
+        captures = {
+            key: sorted(nodes, key=lambda n: (n.start_byte, n.end_byte, n.type))
+            for key, nodes in sorted(QueryCursor(query).captures(tree.root_node).items())
+        }
 
     # Definition spans, smallest first so containment lookups find the
     # innermost match.
