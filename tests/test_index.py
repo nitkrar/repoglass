@@ -786,5 +786,40 @@ class HitContentSourceTests(unittest.TestCase):
                          len(h.code.splitlines()))
 
 
+class NonCandidateFilterTests(unittest.TestCase):
+    """Chunks the reranker adds by file name obey the same filters as
+    retrieval, so a filtered search returns nothing outside the filter."""
+
+    PY = ("class Widget:\n    \"\"\"A widget with a size and a colour for display.\"\"\"\n"
+          "    def __init__(self, size, colour):\n        self.size = size\n"
+          "        self.colour = colour\n")
+    RB = ("class Widget\n  # A widget with a size and a colour for display.\n"
+          "  def initialize(size, colour)\n    @size = size\n    @colour = colour\n  end\nend\n")
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        root = Path(self.tmp.name) / "repo"
+        for rel, body in (("src/widget.py", self.PY), ("other/widget.py", self.PY),
+                          ("lib/widget.rb", self.RB)):
+            (root / rel).parent.mkdir(parents=True, exist_ok=True)
+            (root / rel).write_text(body)
+        self.index = Index.open(root, Settings(embed_backend="none", rescan_after_seconds=3600),
+                                paths=Paths(root=root, home=Path(self.tmp.name) / "home"))
+        self.index.refresh()
+
+    def tearDown(self) -> None:
+        self.index.close()
+        self.tmp.cleanup()
+
+    def test_filters_hold_for_chunks_found_by_file_name(self) -> None:
+        for kwargs, allowed in ((dict(include=["src/*"]), ("src/",)),
+                                (dict(exclude=["other/*", "lib/*"]), ("src/",)),
+                                (dict(lang="ruby"), ("lib/",))):
+            with self.subTest(**kwargs):
+                hits = self.index.search("Widget", k=10, **kwargs)
+                self.assertTrue(hits)
+                self.assertEqual([], [h.path for h in hits if not h.path.startswith(allowed)])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -433,7 +433,8 @@ class Index:
         cands = self._candidates(scored)
         ranked = rank.rerank(
             cands, query, self._settings,
-            load_non_candidates=self._non_candidate_loader(content),
+            load_non_candidates=self._non_candidate_loader(
+                content, lang=lang, include=include, exclude=exclude),
             # Path priors are about code layout; asking for tests or docs
             # and then penalising them would be perverse.
             penalise_paths=normalise_content(content) in ((), ("code",)),
@@ -459,17 +460,21 @@ class Index:
             for sid, score in scored if sid in rows
         ]
 
-    def _non_candidate_loader(self, content):
+    def _non_candidate_loader(self, content, *, lang=None, include=None,
+                              exclude=None):
         """Chunks retrieval missed, whose file stem matches the query name.
 
         A full table scan per query is too expensive, so the stem
-        filter is pushed into SQL and only matching rows are read.
+        filter is pushed into SQL and only matching rows are read. The
+        search's filters apply too, or a filtered search could return a
+        chunk outside them.
         """
         def load(names: set[str]) -> list[rank.Candidate]:
             return [
                 rank.Candidate(symbol_id=sid, path=path, text=text, score=0.0)
                 for sid, path, text in self._store.non_candidate_rows(
-                    names, mode=content
+                    names, mode=content, lang=lang, include=include,
+                    exclude=exclude
                 )
             ]
         return load

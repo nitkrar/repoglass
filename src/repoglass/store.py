@@ -706,7 +706,8 @@ class Store:
         }
 
     def non_candidate_rows(
-        self, names: set[str], *, mode: SearchMode, limit: int = 200
+        self, names: set[str], *, mode: SearchMode, lang=None, include=None,
+        exclude=None, limit: int = 200
     ) -> list[tuple[int, str, str]]:
         """Chunks whose file path contains one of these names.
 
@@ -723,6 +724,8 @@ class Store:
         sql = (f"SELECT c.id, f.path FROM chunk c"
                f" JOIN file f ON f.id = c.file_id"
                f" WHERE ({where})" + self._mode_clause(mode)
+               + self._lang_clause(lang) + self._path_clause(include)
+               + self._exclude_clause(exclude)
                + f" LIMIT {int(limit)}")
         rows = self.conn.execute(sql, args).fetchall()
         texts = self._texts([cid for cid, _ in rows])
