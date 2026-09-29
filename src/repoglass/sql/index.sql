@@ -1,3 +1,7 @@
+-- Index format 2: rows in position order, vectors independent of their
+-- batch. `schema_rev` hashes this file, so bumping the number rebuilds
+-- every index written under an earlier format.
+
 CREATE TABLE meta (
   id             INTEGER PRIMARY KEY CHECK (id = 1),
   schema_rev     TEXT    NOT NULL,

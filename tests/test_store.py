@@ -174,6 +174,14 @@ class SchemaRevisionTests(unittest.TestCase):
         finally:
             sm.SCHEMA = original
 
+    def test_indexes_from_0_3_2_are_rebuilt(self) -> None:
+        """0.3.2 stored rows in capture order and vectors that depend on
+        their batch; neither is detected by the identity or the canary.
+        The value is 0.3.2's `schema_rev()`."""
+        import repoglass.store as sm
+
+        self.assertNotEqual("6fe0ea298ce9f27c", sm.schema_rev())
+
     def test_stale_schema_is_rebuilt_not_reused(self) -> None:
         import repoglass.store as sm
 
