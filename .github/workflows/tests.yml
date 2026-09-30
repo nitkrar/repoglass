@@ -33,16 +33,16 @@ jobs:
       # compiler on any runner in the matrix.
       - name: install
         # A dependency released minutes earlier can be missing from the
-        # PyPI mirror a runner reads. Only that error waits and retries;
-        # any other install failure fails at once.
+        # PyPI mirror a runner reads. Only that error retries, after 1, 2
+        # and 5 minutes; any other install failure fails at once.
         run: |
-          for attempt in 1 2 3; do
+          for wait in 60 120 300 0; do
             if python -m pip install --quiet . 2>"$RUNNER_TEMP/pip.err"; then exit 0; fi
             cat "$RUNNER_TEMP/pip.err" >&2
             grep -q "No matching distribution found" "$RUNNER_TEMP/pip.err" || exit 1
-            [ "$attempt" = 3 ] && exit 1
-            echo "a dependency is not on the index yet; retrying in 5 minutes" >&2
-            sleep 300
+            [ "$wait" = 0 ] && exit 1
+            echo "a dependency is not on the index yet; retrying in ${wait}s" >&2
+            sleep "$wait"
           done
 
       - name: tests
