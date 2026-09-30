@@ -32,7 +32,18 @@ jobs:
       # Every dependency ships an abi3 wheel, so this resolves without a
       # compiler on any runner in the matrix.
       - name: install
-        run: python -m pip install --quiet .
+        # A dependency released minutes earlier can be missing from the
+        # PyPI mirror a runner reads. Only that error waits and retries;
+        # any other install failure fails at once.
+        run: |
+          for attempt in 1 2 3; do
+            if python -m pip install --quiet . 2>"$RUNNER_TEMP/pip.err"; then exit 0; fi
+            cat "$RUNNER_TEMP/pip.err" >&2
+            grep -q "No matching distribution found" "$RUNNER_TEMP/pip.err" || exit 1
+            [ "$attempt" = 3 ] && exit 1
+            echo "a dependency is not on the index yet; retrying in 5 minutes" >&2
+            sleep 300
+          done
 
       - name: tests
         run: python -m unittest discover -s tests -t .
