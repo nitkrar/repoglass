@@ -74,6 +74,12 @@ class RefreshTests(IndexTestCase):
         self.assertEqual(1, report.deleted)
         self.assertEqual([], self.index.definitions("top_level"))
 
+    def test_force_rebuilds_from_empty(self) -> None:
+        indexed = len(self.index._store.known_files())
+        report = self.index.refresh(force=True)
+        self.assertEqual((indexed, 0, 0), (report.added, report.changed, report.deleted))
+        self.assertTrue(self.index.definitions("top_level"))
+
     def test_mtime_moving_backwards_is_still_a_change(self) -> None:
         """cp -p and branch checkout move mtime backwards."""
         import os

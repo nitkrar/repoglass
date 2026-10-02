@@ -318,7 +318,7 @@ class ItemSyncTests(StoreTestCase):
     def test_every_removal_path_drops_the_items(self) -> None:
         for remove in (lambda: self.store.delete_files(["a.py"]),
                        lambda: self.store.upsert_chunks("a.py", []),
-                       lambda: self.store.reset_content()):
+                       lambda: self.store.reset(self.store.identity())):
             self._seed()
             self.assertTrue(self.found())
             remove()

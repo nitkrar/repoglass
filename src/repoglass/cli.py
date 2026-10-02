@@ -540,7 +540,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     i = sub.add_parser("index", help="build or update the index")
     i.add_argument("--force", action="store_true",
-                   help="re-extract every file, not just changed ones")
+                   help="rebuild the index from empty")
     common(i)
     i.set_defaults(func=cmd_index)
 

@@ -192,22 +192,10 @@ class Store:
         keeps the store ignorant of how extraction works.
         """
         conn = connect(db_path)
-        if _has_table(conn, "meta") and _stored_rev(conn) != schema_rev():
-            # The tables themselves changed, so resetting rows is not enough.
-            # At this corpus size rebuilding is cheaper than writing migrations.
-            _drop_all(conn)
-        if not _has_table(conn, "meta"):
-            conn.executescript(SCHEMA)
-            conn.execute(
-                "INSERT INTO meta (id, schema_rev, embed_model,"
-                " embed_backend, embed_dims, coverage, extractor_rev,"
-                " categories_rev, last_scan_at)"
-                " VALUES (1,?,?,?,?,?,?,?,0)",
-                (schema_rev(), settings.embed_model, settings.embed_backend,
-                 0, settings.coverage, extractor_rev,
-                 categories_rev(settings)),
-            )
-            conn.commit()
+        # A changed schema is rebuilt rather than migrated: at this
+        # corpus size rebuilding is cheaper than writing migrations.
+        if not _has_table(conn, "meta") or _stored_rev(conn) != schema_rev():
+            _rebuild(conn, settings, extractor_rev)
         return cls(conn, settings)
 
     def identity(self) -> Identity | None:
@@ -383,11 +371,17 @@ class Store:
         with self.transaction():
             self.items.sync_keywords()
 
-    def reset_content(self) -> None:
-        """Drop every indexed row, keeping meta. Used when identity changes."""
-        self.conn.execute("DELETE FROM file")
-        self.items.clear()
-        self._commit()
+    def reset(self, current: "Identity") -> None:
+        """Empty the index and record `current` as what it is built for.
+
+        The one way to a clean index: a changed schema, a changed
+        identity and a forced refresh all come here.
+        """
+        _rebuild(self.conn, self._settings, current.extractor_rev)
+        # The old handles belong to the dropped tables.
+        self.items = Items(self.conn, "rg", ITEM_FIELDS)
+        self._vector_items = {}
+        self.set_identity(current)
 
     def set_identity(self, current: "Identity") -> None:
         """Persist every field `needs_reindex` compares.
@@ -799,22 +793,52 @@ def _stored_rev(conn: sqlite3.Connection) -> str:
     return row[0] if row else -1
 
 
-def _drop_all(conn: sqlite3.Connection) -> None:
-    """Drop every object this schema owns, in dependency order."""
+def _rebuild(conn: sqlite3.Connection, settings: Settings, extractor_rev: str) -> None:
+    """Drop every object and create the schema empty.
+
+    One transaction, so another connection sees the old index or the
+    new one and never a database without tables. Foreign keys are off
+    for it: with them on, dropping a table deletes it row by row,
+    cascades included.
+    """
     conn.execute("PRAGMA foreign_keys = OFF")
-    # Views first: one of them reads the tables below, and dropping a
-    # table out from under it is what makes the order matter.
-    for name, kind in conn.execute(
-        "SELECT name, type FROM sqlite_master"
-        " WHERE type IN ('view','table','index') AND name NOT LIKE 'sqlite_%'"
-        " ORDER BY CASE type WHEN 'view' THEN 0 WHEN 'index' THEN 1 ELSE 2 END"
-    ).fetchall():
-        try:
-            conn.execute(f"DROP {kind.upper()} IF EXISTS {name}")
-        except sqlite3.OperationalError:
-            pass
-    conn.commit()
-    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("BEGIN")
+    try:
+        # Views first: one of them reads the tables below, and dropping a
+        # table out from under it is what makes the order matter.
+        for name, kind in conn.execute(
+            "SELECT name, type FROM sqlite_master"
+            " WHERE type IN ('view','table','index') AND name NOT LIKE 'sqlite_%'"
+            " ORDER BY CASE type WHEN 'view' THEN 0 WHEN 'index' THEN 1 ELSE 2 END"
+        ).fetchall():
+            try:
+                conn.execute(f"DROP {kind.upper()} IF EXISTS {name}")
+            except sqlite3.OperationalError:
+                pass
+        # One statement at a time: executescript would commit the
+        # transaction this has open.
+        statement = ""
+        for line in SCHEMA.splitlines(keepends=True):
+            statement += line
+            if sqlite3.complete_statement(statement):
+                conn.execute(statement)
+                statement = ""
+        conn.execute(
+            "INSERT INTO meta (id, schema_rev, embed_model,"
+            " embed_backend, embed_dims, coverage, extractor_rev,"
+            " categories_rev, last_scan_at)"
+            " VALUES (1,?,?,?,?,?,?,?,0)",
+            (schema_rev(), settings.embed_model, settings.embed_backend,
+             0, settings.coverage, extractor_rev,
+             categories_rev(settings)),
+        )
+        Items(conn, "rg", ITEM_FIELDS)
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
 
 
 def _has_table(conn: sqlite3.Connection, name: str) -> bool:

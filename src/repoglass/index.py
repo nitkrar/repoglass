@@ -84,7 +84,7 @@ class Index:
         moves backwards on branch checkout, cp -p and archive extraction.
         """
         started = time.perf_counter()
-        self._reindex_if_identity_changed()
+        self._reset_if_needed(force)
 
         walked = {f.path: f for f in discovery.walk(self._paths, self._settings)}
         indexed = self._store.known_files()
@@ -95,9 +95,6 @@ class Index:
             p for p in walked.keys() & indexed.keys()
             if (walked[p].mtime_ns, walked[p].size) != indexed[p]
         }
-        if force:
-            changed |= walked.keys() - added
-
         if deleted:
             self._store.delete_files(deleted)
         touched = sorted(added | changed)
@@ -172,17 +169,16 @@ class Index:
             chunking_rev=chunking_rev(self._settings),
         )
 
-    def _reindex_if_identity_changed(self) -> None:
-        """Drop every indexed row when anything that shaped it changed.
+    def _reset_if_needed(self, force: bool) -> None:
+        """Empty the index when forced, or when anything that shaped it changed.
 
         Vectors from a different model are not comparable, and a changed
         .scm shifts spans. Reusing rows across either produces mixed-width
         blobs that crash the reshape in vector.search.
         """
         current = self._current_identity()
-        if self._store.needs_reindex(current):
-            self._store.reset_content()
-            self._store.set_identity(current)
+        if force or self._store.needs_reindex(current):
+            self._store.reset(current)
 
     def _index_file(self, file, source: str) -> None:
         result = extract.extract(file, source, self._settings)
