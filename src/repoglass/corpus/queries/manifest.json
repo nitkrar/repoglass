@@ -11,12 +11,14 @@
     "upstream_set": "tree-sitter-language-pack"
   },
   "csharp": {
+    "supplemental_refs": "csharp-refs.scm",
     "upstream_set": "tree-sitter-language-pack"
   },
   "elixir": {
     "upstream_set": "tree-sitter-language-pack"
   },
   "go": {
+    "supplemental_refs": "go-refs.scm",
     "upstream_set": "tree-sitter-language-pack"
   },
   "haskell": {
@@ -24,15 +26,19 @@
     "upstream_set": null
   },
   "java": {
+    "supplemental_refs": "java-refs.scm",
     "upstream_set": "tree-sitter-language-pack"
   },
   "javascript": {
+    "supplemental_refs": "javascript-refs.scm",
     "upstream_set": "tree-sitter-language-pack"
   },
   "kotlin": {
+    "supplemental_refs": "kotlin-refs.scm",
     "upstream_set": "tree-sitter-languages"
   },
   "lua": {
+    "supplemental_refs": "lua-refs.scm",
     "upstream_set": "tree-sitter-language-pack"
   },
   "markdown": {
@@ -43,6 +49,7 @@
     "upstream_set": "tree-sitter-languages"
   },
   "python": {
+    "supplemental_refs": "python-refs.scm",
     "upstream_set": "tree-sitter-language-pack"
   },
   "ruby": {

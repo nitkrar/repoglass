@@ -9,3 +9,11 @@
 (call_expression
   function: (member_expression
     property: (property_identifier) @name.reference.call)) @reference.call
+
+; javascript-refs.scm's member patterns, for the same reason.
+(member_expression
+  property: (property_identifier) @name.reference.member) @reference.member
+
+((member_expression
+  object: (identifier) @name.reference.type) @reference.type
+  (#match? @name.reference.type "^[A-Z]"))

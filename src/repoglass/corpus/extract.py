@@ -207,12 +207,17 @@ def extract(file: SourceFile, source: str, settings: Settings) -> Extraction:
             # else: navigable, not retrievable
 
     refs: list[RawRef] = []
+    # One node, one reference: a member call matches both a call pattern
+    # and a member-read pattern.
+    referenced: set[tuple[int, int]] = set()
     for key, nodes in captures.items():
         if not key.startswith("name.reference."):
             continue
         for n in nodes:
-            if (n.start_byte, n.end_byte) in named_here | ignored:
+            r = (n.start_byte, n.end_byte)
+            if r in named_here | ignored or r in referenced:
                 continue
+            referenced.add(r)
             span = innermost(n.start_byte, n.end_byte)
             # The innermost definition containing this reference, which
             # is what `enclosing` reports.

@@ -10,3 +10,13 @@
 (call_expression
   function: (field_expression
     field: (identifier) @name.reference.call)) @reference.call
+
+; A member read: `count` in `w.count`. Calls are matched above.
+(field_expression
+  field: (identifier) @name.reference.member) @reference.member
+
+; An object named before a dot: `Widget` in `Widget.make()`. A
+; lowercase receiver is a value, which names no definition.
+((field_expression
+  value: (identifier) @name.reference.type) @reference.type
+  (#match? @name.reference.type "^[A-Z]"))
