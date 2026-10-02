@@ -59,6 +59,10 @@ CREATE TABLE symbol (
 );
 CREATE INDEX symbol_name ON symbol(name, tag);
 CREATE INDEX symbol_file ON symbol(file_id);
+-- Deleting a symbol nulls every reference pointing at it. Unindexed,
+-- that is a scan of the whole table per deleted row, and replacing a
+-- file's symbols deletes all of them.
+CREATE INDEX symbol_enclosing ON symbol(enclosing_id);
 
 CREATE TABLE chunk (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
