@@ -209,6 +209,42 @@ class RerankReachableTests(unittest.TestCase):
             idx.refresh()
             idx.search("unlock the vault", k=5, content="code")
 
+    def test_a_default_search_ranks_the_source_above_its_test(self) -> None:
+        """The test matches the query more strongly; its path is what
+        should put it second."""
+        import tempfile
+        from pathlib import Path
+
+        from repoglass import Index
+        from repoglass.config import Paths
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            (root / "tests").mkdir(parents=True)
+            (root / "chip.py").write_text(
+                "def chip(text):\n"
+                "    '''A rounded label for tags.'''\n"
+                "    return text\n"
+            )
+            (root / "tests" / "test_chip.py").write_text(
+                "def test_chip():\n"
+                "    '''tags render as tags; every tags label is a chip.'''\n"
+                "    assert chip('a')\n"
+            )
+            # The weakest match. Scores are normalised per list, so
+            # without it the source would score zero and no penalty on
+            # the test could reorder them.
+            (root / "notes.py").write_text(
+                "def notes():\n"
+                "    '''Release notes, changelog entries, version history and\n"
+                "    upgrade guidance, with git tags noted once.'''\n"
+                "    return []\n"
+            )
+            idx = Index.open(root, Settings(rerank=True, embed_backend="none"),
+                             paths=Paths(root=root, home=Path(tmp) / "home"))
+            idx.refresh()
+            self.assertEqual("chip.py", idx.search("tags", k=2)[0].path)
+
 
 if __name__ == "__main__":
     unittest.main()

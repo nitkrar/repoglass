@@ -432,8 +432,9 @@ class Index:
             load_non_candidates=self._non_candidate_loader(
                 content, lang=lang, include=include, exclude=exclude),
             # Path priors are about code layout; asking for tests or docs
-            # and then penalising them would be perverse.
-            penalise_paths=normalise_content(content) in ((), ("code",)),
+            # and then penalising them would be perverse. No filter at all
+            # asks for neither, though it returns both.
+            penalise_paths=not content or normalise_content(content) == ("code",),
             limit=k,
         )
         # Rescale to [0,1]. The layer multiplies by boosts -- a definition
